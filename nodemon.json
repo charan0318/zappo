@@ -1,0 +1,14 @@
+{
+  "watch": [
+    "src"
+  ],
+  "ignore": [
+    "auth/**",
+    "logs/**",
+    "node_modules/**"
+  ],
+  "ext": "js,json",
+  "exec": "node src/index.js"
+}
+
+
