@@ -54,12 +54,12 @@ async function startZappo() {
 
     // Start Express server
     const PORT = process.env.PORT || 3000;
-    app.listen(PORT, "0.0.0.0", () => {
-      logger.info(`🌐 Express server running on port ${PORT}`);
+    app.listen(PORT, () => {
+      logger.info(🌐 Express server running on port );
       
       // Start keep-alive if on Render or production
       if (process.env.RENDER || process.env.NODE_ENV === 'production') {
-        const appUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+        const appUrl = process.env.RENDER_EXTERNAL_URL || http://localhost:;
         const keepAlive = new KeepAlive(appUrl);
         keepAlive.start();
       }
@@ -70,6 +70,7 @@ async function startZappo() {
     // Handle graceful shutdown
     process.on('SIGINT', async () => {
       logger.info('🛑 Shutting down ZAPPO...');
+      // Do NOT call logout here; we want to keep the session persistent across restarts.
       try {
         if (whatsapp?.end) {
           await whatsapp.end();
@@ -89,4 +90,3 @@ async function startZappo() {
 
 // Start the application
 startZappo();
-
