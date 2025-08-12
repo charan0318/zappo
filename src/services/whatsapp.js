@@ -568,7 +568,7 @@ function parsePhonesFromVcard(vcard) {
 
 const logout = async () => {
   try {
-    if (sock) {
+    if (sock && typeof sock.logout === 'function') {
       logger.info('📱 Logging out from WhatsApp...');
       await sock.logout();
       sock = null;
@@ -594,7 +594,7 @@ const resetSession = async () => {
     logger.info('🔄 Manually resetting WhatsApp session...');
     
     // Disconnect if connected
-    if (sock) {
+    if (sock && typeof sock.logout === 'function') {
       try {
         await sock.logout();
       } catch (e) {
@@ -628,7 +628,7 @@ const forceDisconnect = async () => {
   try {
     logger.info('🚨 Force disconnecting WhatsApp...');
     
-    if (sock) {
+    if (sock && typeof sock.end === 'function') {
       try {
         sock.end();
       } catch (e) {
