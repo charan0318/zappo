@@ -128,6 +128,20 @@ const initializeWhatsApp = async () => {
       
       if (qr) {
         logger.info('📱 QR Code generated - please scan with WhatsApp');
+        
+        // Log QR code as copyable text for server environments
+        console.log('='.repeat(60));
+        console.log('📱 QR CODE FOR WHATSAPP AUTHENTICATION:');
+        console.log('='.repeat(60));
+        console.log(qr);
+        console.log('='.repeat(60));
+        console.log('📋 COPY THE TEXT ABOVE AND PASTE IT INTO:');
+        console.log('🔗 https://qr-code-generator.com/');
+        console.log('🔗 https://www.qr-code-generator.org/');
+        console.log('📱 Then scan the generated QR with WhatsApp');
+        console.log('='.repeat(60));
+        
+        // Also show visual QR (might be broken in server logs)
         qrcode.generate(qr, { small: true });
       }
       
