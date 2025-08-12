@@ -93,27 +93,7 @@ app.get('/', (req, res) => {
 
 // QR Code endpoint - GENIUS IDEA! 
 app.get('/qr', (req, res) => {
-  const { getCurrentQR, isWhatsAppConnected } = require('./services/whatsapp');
-  
-  if (isWhatsAppConnected()) {
-    res.json({
-      status: 'connected',
-      message: 'WhatsApp is already connected!',
-      connected: true
-    });
-    return;
-  }
-
-  const currentQR = getCurrentQR();
-  if (!currentQR) {
-    res.json({
-      status: 'no_qr',
-      message: 'No QR code available. Bot might be connecting...',
-      refresh: 'Refresh this page in a few seconds'
-    });
-    return;
-  }
-
+  // Simple version - just show instruction to check logs for now
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -123,54 +103,47 @@ app.get('/qr', (req, res) => {
         <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
             .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-            .qr-container { margin: 20px 0; }
-            .qr-code { max-width: 300px; margin: 20px auto; border: 2px solid #25D366; border-radius: 10px; padding: 10px; background: white; }
             .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; }
-            .timer { background: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            .logs-section { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #25D366; }
             h1 { color: #25D366; }
             .refresh-btn { background: #25D366; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; margin: 10px; }
             .refresh-btn:hover { background: #1fa855; }
+            code { background: #f1f1f1; padding: 2px 6px; border-radius: 3px; }
         </style>
         <script>
-            // Auto-refresh every 15 seconds
-            setTimeout(() => window.location.reload(), 15000);
+            // Auto-refresh every 10 seconds
+            setTimeout(() => window.location.reload(), 10000);
         </script>
     </head>
     <body>
         <div class="container">
             <h1>🤖 ZAPPO WhatsApp Bot</h1>
-            <h2>📱 Scan QR Code to Connect</h2>
+            <h2>📱 QR Code Authentication</h2>
             
             <div class="instructions">
-                <strong>📋 How to Connect:</strong><br>
-                1. Open WhatsApp on your phone<br>
-                2. Go to Settings → Linked Devices<br>
-                3. Tap "Link a Device"<br>
-                4. Scan the QR code below
+                <strong>📋 How to Get QR Code:</strong><br>
+                1. Check your Render deployment logs<br>
+                2. Look for the QR code text between the === lines<br>
+                3. Copy the long text string (starts with 2@...)<br>
+                4. Paste it into <a href="https://qr-code-generator.com/" target="_blank">QR Generator</a><br>
+                5. Scan the generated QR with WhatsApp
             </div>
             
-            <div class="timer">
-                ⏰ QR Code expires in ~20 seconds. Page auto-refreshes every 15 seconds.
+            <div class="logs-section">
+                <h3>📊 Where to Find QR Code:</h3>
+                <p>Go to your Render dashboard → Logs → Look for:</p>
+                <code>� QR CODE FOR WHATSAPP AUTHENTICATION:</code><br>
+                <code>2@ABC123XYZ... (long string)</code>
             </div>
             
-            <div class="qr-container">
-                <div id="qrcode"></div>
+            <div class="instructions">
+                <strong>⏰ QR Code expires every 20 seconds</strong><br>
+                Fresh QR codes generate automatically every 30 seconds
             </div>
             
-            <button class="refresh-btn" onclick="window.location.reload()">🔄 Refresh QR Code</button>
+            <button class="refresh-btn" onclick="window.location.reload()">🔄 Refresh Page</button>
             
-            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
-            <script>
-                const qrData = '${currentQR}';
-                QRCode.toCanvas(document.getElementById('qrcode'), qrData, {
-                    width: 256,
-                    margin: 2,
-                    color: {
-                        dark: '#000000',
-                        light: '#FFFFFF'
-                    }
-                });
-            </script>
+            <p><small>This page auto-refreshes every 10 seconds</small></p>
         </div>
     </body>
     </html>
