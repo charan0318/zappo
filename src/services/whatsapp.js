@@ -19,6 +19,9 @@ const messageQueue = [];
 let networkBackoffMs = 5000;
 const MAX_NETWORK_BACKOFF_MS = 5 * 60 * 1000;
 
+// SOLUTION: Track server startup time to ignore old messages
+const SERVER_START_TIME = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
+
 // CRITICAL: Clear all existing WhatsApp sessions to prevent conflicts
 async function clearAllWhatsAppSessions() {
   try {
@@ -226,6 +229,13 @@ const initializeWhatsApp = async () => {
       
       if (!msg.key.fromMe && msg.message) {
         try {
+          // SOLUTION: Skip messages that arrived before server started
+          const messageTimestamp = msg.messageTimestamp;
+          if (messageTimestamp && messageTimestamp < SERVER_START_TIME) {
+            logger.info(`Skipping old message from ${msg.key.remoteJid} (sent before server restart)`);
+            return;
+          }
+          
           const messageType = Object.keys(msg.message)[0];
           
           // Block group chats explicitly
@@ -263,6 +273,12 @@ const initializeWhatsApp = async () => {
             const reaction = msg.message.reactionMessage;
             const from = msg.key.remoteJid;
             
+            // SOLUTION: Skip old reactions too
+            if (messageTimestamp && messageTimestamp < SERVER_START_TIME) {
+              logger.info(`Skipping old reaction from ${from} (sent before server restart)`);
+              return;
+            }
+            
             if (reaction && reaction.text) {
               logWhatsAppEvent('reaction_received', { from, emoji: reaction.text });
               
@@ -281,6 +297,13 @@ const initializeWhatsApp = async () => {
           // Contact share support (WhatsApp contacts vCard)
           if (messageType === 'contactMessage' || messageType === 'contactsArrayMessage') {
             const from = msg.key.remoteJid;
+            
+            // SOLUTION: Skip old contact shares too
+            if (messageTimestamp && messageTimestamp < SERVER_START_TIME) {
+              logger.info(`Skipping old contact share from ${from} (sent before server restart)`);
+              return;
+            }
+            
             let contactPhones = [];
             try {
               if (msg.message.contactMessage?.vcard) {

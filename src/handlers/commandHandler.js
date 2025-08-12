@@ -67,28 +67,20 @@ class CommandHandler {
         return;
       }
 
-      // Check if this is a first-time user (no wallet, no state)
-      const { users } = require('../services/database');
-      const existingUser = await users.findUserByPhone(phone);
-      if (!existingUser && !text.toLowerCase().includes('help')) {
-        await this.sendMessage(from, this.getWelcomeMessage());
-        return;
-      }
-
-      if (config.features?.nebulaChatOnly) {
-        try {
-          const reply = await nebulaChat.chat(phone, text);
-          await this.sendMessage(from, reply);
-        } catch {
-          await this.sendMessage(from, '❌ Nebula is unavailable. Please try again later.');
-        }
-        return;
-      }
-      
       // Parse the command/intent
       const parsed = commandParser.parseInput(text);
       
+      // Debug logging to see what's happening
+      logger.info(`Command parsed: ${text} -> Intent: ${parsed.intent}`);
+      
       if (parsed.intent === 'UNKNOWN') {
+        // Check if this is a first-time user (no wallet, no state) ONLY for unknown commands
+        const existingUser = await users.findUserByPhone(phone);
+        if (!existingUser && !text.toLowerCase().includes('help')) {
+          await this.sendMessage(from, this.getWelcomeMessage());
+          return;
+        }
+        // For existing users with unknown commands, show help
         await this.sendMessage(from, this.getUnknownCommandResponse());
         return;
       }
@@ -280,7 +272,34 @@ class CommandHandler {
       
     } catch (error) {
       logger.error(`Claim failed for ${phone}:`, error);
-      await this.sendMessage(from, `❌ *Unable to claim:* ${error.message}\n\n🔍 *Possible reasons:*\n• Link expired or already used\n• Wrong phone number\n• Insufficient funds for gas fees\n• Technical issue\n\n💡 *Need help?* Contact support or ask the sender to resend the claim link.`);
+      
+      // Provide better error messages based on error type
+      if (error.message.includes('Amount too small')) {
+        await this.sendMessage(from, `❌ *Claim Failed - Amount Too Small*
+
+${error.message}
+
+💡 *Solutions:*
+• Ask sender to send more AVAX
+• Wait for lower network congestion
+• Contact sender for assistance
+
+⛽ *Gas fees vary with network activity*`);
+      } else if (error.message.includes('gas fees')) {
+        await this.sendMessage(from, `❌ *Claim Failed - Gas Fee Issue*
+
+${error.message}
+
+💡 *What happened:*
+• Network gas fees are higher than expected
+• Available amount is too small to cover fees
+
+🔄 *Try again:*
+• Ask sender to send at least 0.005 AVAX
+• Or try again during off-peak hours`);
+      } else {
+        await this.sendMessage(from, `❌ *Unable to claim:* ${error.message}\n\n🔍 *Possible reasons:*\n• Link expired or already used\n• Wrong phone number\n• Insufficient funds for gas fees\n• Technical issue\n\n💡 *Need help?* Contact support or ask the sender to resend the claim link.`);
+      }
     }
   }
   
@@ -301,13 +320,15 @@ class CommandHandler {
       if (result.success) {
         await this.sendMessage(from, `✅ *Wallet Created Successfully!*
 
-🏦 *Address:* \`${result.walletAddress}\`
-💰 *Balance:* 0 AVAX
-
-Your wallet is now ready to use! Try:
+🏦 Your wallet is now ready to use! Try:
 • \`/balance\` - Check your balance
 • \`/backup\` - Export your private key
-• \`/help\` - See all commands`);
+• \`/help\` - See all commands
+
+💡 *To start sending AVAX, deposit some AVAX to your wallet first!*`);
+        
+        // Send wallet address as separate message for easy copying
+        await this.sendMessage(from, `📋 *Your Wallet Address:*\n\`${result.walletAddress}\`\n\n*Tap to copy this address for deposits!*`);
       } else {
         await this.sendMessage(from, `❌ Failed to create wallet: ${result.error}`);
       }
@@ -411,6 +432,26 @@ You can type cancel to stop anytime.`);
     try {
       const pendingTx = this.pendingTransactions.get(phone);
       
+      // Handle small amount confirmation specifically
+      if (pendingTx.type === 'small_amount_confirmation') {
+        if (commandParser.isConfirmation(text)) {
+          // User confirmed despite small amount warning
+          logger.info(`Small amount transaction confirmed by ${phone} with: ${text}`);
+          this.pendingTransactions.delete(phone);
+          await transactionHandler.handleSendTransaction(from, phone, pendingTx.originalParams);
+        } else if (commandParser.isCancellation(text)) {
+          // User cancelled the small amount transaction
+          logger.info(`Small amount transaction cancelled by ${phone} with: ${text}`);
+          this.pendingTransactions.delete(phone);
+          await this.sendMessage(from, '❌ Transaction cancelled. Consider sending a larger amount for better success rate.');
+        } else {
+          // Invalid response for small amount confirmation
+          await this.sendMessage(from, '❓ Please react with 👍 to proceed anyway or 👎 to cancel the small amount transaction.');
+        }
+        return;
+      }
+      
+      // Handle regular transaction confirmations
       if (commandParser.isConfirmation(text)) {
         // User confirmed the transaction
         logger.info(`Transaction confirmed by ${phone} with: ${text}`);
@@ -617,6 +658,10 @@ I'm here to help you manage your Avalanche (AVAX) cryptocurrency right from your
 • Use your private key to restore access
 • Great if you already have a wallet
 
+💸 *Send AVAX to Contacts*
+• Type: "send avax" to start sending to your contacts
+• Easy transfers via WhatsApp contacts!
+
 ❓ *Need Help?*
 • Type: \`/help\` for all commands
 • Ask me anything about crypto!
@@ -634,7 +679,8 @@ I didn't understand that command. Here are some things you can try:
 • "create wallet" - Create a new wallet
 • "import wallet" - Import existing wallet
 • \`/balance\` - Check your balance
-• "send 1 AVAX to 0x..." - Send AVAX
+• "send avax" - Start sending AVAX to contacts
+• "send 1 AVAX to 0x..." - Send AVAX to address
 
 Need help? Type \`/help\` for a full list of commands!`;
   }

@@ -60,7 +60,7 @@ const config = {
     enabled: true,
     expiryDays: parseInt(process.env.ESCROW_EXPIRY_DAYS || '3', 10),
     botNumber: process.env.BOT_NUMBER || '919489042245',
-    claimMinGasBuffer: parseFloat(process.env.CLAIM_MIN_GAS_BUFFER || '0.002')
+    claimMinGasBuffer: parseFloat(process.env.CLAIM_MIN_GAS_BUFFER || '0.0005') // Reduced default buffer
   },
   
   // Logging Configuration

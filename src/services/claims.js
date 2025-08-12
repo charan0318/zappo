@@ -116,22 +116,39 @@ class ClaimsService {
         throw new Error('Unable to estimate transaction fees. Please try again later.');
       }
       
-      // Check if amount covers gas fees with safety buffer
+      // Improved gas calculation with dynamic buffer
       const gasCost = parseFloat(gasEstimate.estimatedCost);
-      const safetyBuffer = config.escrow.claimMinGasBuffer || 0.002; // Default 0.002 AVAX buffer
-      const totalRequired = gasCost + safetyBuffer;
+      const availableAmount = record.amount_avax;
       
-      logger.info(`Gas estimation: cost=${gasCost}, buffer=${safetyBuffer}, total=${totalRequired}, available=${record.amount_avax}`);
+      // Calculate dynamic gas buffer based on amount size
+      const minGasBuffer = 0.0005; // Minimum 0.0005 AVAX
+      const dynamicGasBuffer = Math.max(minGasBuffer, availableAmount * 0.1); // 10% of amount or min buffer
+      const maxGasBuffer = 0.001; // Cap at 0.001 AVAX for small amounts
+      const gasBuffer = Math.min(dynamicGasBuffer, maxGasBuffer);
       
-      if (record.amount_avax <= totalRequired) {
-        logger.warn(`Insufficient funds for gas: required=${totalRequired}, available=${record.amount_avax}`);
-        throw new Error(`Insufficient funds to cover network fees. Required: ${totalRequired.toFixed(6)} AVAX, Available: ${record.amount_avax} AVAX. Please ask the sender to increase the amount.`);
+      const totalGasNeeded = gasCost + gasBuffer;
+      
+      logger.info(`Improved gas estimation: cost=${gasCost}, dynamicBuffer=${gasBuffer}, total=${totalGasNeeded}, available=${availableAmount}`);
+      
+      // Better validation with clearer conditions
+      if (totalGasNeeded >= availableAmount * 0.9) { // If gas is more than 90% of amount
+        const recommendedMin = (totalGasNeeded * 1.5).toFixed(6);
+        logger.warn(`Amount too small for gas fees: required=${totalGasNeeded}, available=${availableAmount}, recommended=${recommendedMin}`);
+        throw new Error(`Amount too small for gas fees. Minimum recommended: ${recommendedMin} AVAX`);
       }
       
-      // Calculate amount after deducting gas fees
-      const transferAmount = record.amount_avax - gasCost;
+      // Ensure minimum claimable amount after gas
+      const netAmount = availableAmount - totalGasNeeded;
+      if (netAmount < 0.0001) { // Minimum 0.0001 AVAX after gas
+        const recommendedMin = (totalGasNeeded + 0.0001).toFixed(6);
+        logger.warn(`Net amount too small after gas: net=${netAmount}, recommended=${recommendedMin}`);
+        throw new Error(`Amount too small after gas fees. Send at least ${recommendedMin} AVAX`);
+      }
       
-      logger.info(`Proceeding with claim: transfer=${transferAmount}, gas=${gasCost}`);
+      // Calculate amount after deducting gas fees (use actual gas cost, not buffer)
+      const transferAmount = availableAmount - gasCost;
+      
+      logger.info(`Proceeding with claim: transfer=${transferAmount}, gas=${gasCost}, buffer=${gasBuffer}`);
       
       // Sweep funds from ephemeral to recipient (amount minus gas)
       const tx = await nebulaService.sendTransaction(privyWallet, recipientWalletAddress, transferAmount);

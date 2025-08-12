@@ -21,13 +21,29 @@ class TransactionHandler {
       
       // Format balance
       const balance = parseFloat(wallet.balance).toFixed(6);
+      const hasZeroBalance = parseFloat(balance) === 0;
       
-      await this.sendMessage(from, `💰 *Wallet Balance*
+      if (hasZeroBalance) {
+        await this.sendMessage(from, `💰 *Wallet Balance*
+
+🏦 *Address:* \`${wallet.address}\`
+💎 *Balance:* ${balance} AVAX
+
+⚠️ *Your wallet is empty!*
+💡 *To start sending AVAX, please deposit some AVAX to your wallet first.*
+
+📋 *Your wallet address for deposits:*`);
+        
+        // Send address as separate message for easy copying
+        await this.sendMessage(from, `\`${wallet.address}\`\n\n*Tap to copy this address!*`);
+      } else {
+        await this.sendMessage(from, `💰 *Wallet Balance*
 
 🏦 *Address:* \`${wallet.address}\`
 💎 *Balance:* ${balance} AVAX
 
 💡 *Tip:* Use \`/history\` to see your recent transactions.`);
+      }
       
       logUserAction(phone, 'balance_checked', { balance });
       
@@ -155,6 +171,30 @@ Your wallet is ready for transactions!`);
       
       if (sendAmount > currentBalance) {
         await this.sendMessage(from, `Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`);
+        return;
+      }
+      
+      // Warn about small amounts for unregistered recipients (claim-links)
+      if (recipientPhone && sendAmount < 0.01) {
+        await this.sendMessage(from, `⚠️ *Small Amount Warning*
+
+You're sending ${sendAmount} AVAX to an unregistered user.
+
+📊 *Gas Fee Info:*
+• Estimated claim gas: ~0.002 AVAX
+• Recommended minimum: 0.005 AVAX
+• Recipient will get: ~${Math.max(0, sendAmount - 0.002).toFixed(6)} AVAX
+
+💡 *Tip:* Send at least 0.005 AVAX for better claim success rate.
+
+Continue? React with 👍 (yes) or 👎 (cancel)`);
+        
+        // Set user state to wait for confirmation
+        this.pendingTransactions.set(phone, {
+          type: 'small_amount_confirmation',
+          originalParams: sendParams,
+          timestamp: Date.now()
+        });
         return;
       }
       
