@@ -91,63 +91,117 @@ app.get('/', (req, res) => {
   });
 });
 
-// QR Code endpoint - GENIUS IDEA! 
-app.get('/qr', (req, res) => {
-  // Simple version - just show instruction to check logs for now
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>ZAPPO WhatsApp QR Code</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
-            .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-            .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; }
-            .logs-section { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #25D366; }
-            h1 { color: #25D366; }
-            .refresh-btn { background: #25D366; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; margin: 10px; }
-            .refresh-btn:hover { background: #1fa855; }
-            code { background: #f1f1f1; padding: 2px 6px; border-radius: 3px; }
-        </style>
-        <script>
-            // Auto-refresh every 10 seconds
-            setTimeout(() => window.location.reload(), 10000);
-        </script>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤖 ZAPPO WhatsApp Bot</h1>
-            <h2>📱 QR Code Authentication</h2>
-            
-            <div class="instructions">
-                <strong>📋 How to Get QR Code:</strong><br>
-                1. Check your Render deployment logs<br>
-                2. Look for the QR code text between the === lines<br>
-                3. Copy the long text string (starts with 2@...)<br>
-                4. Paste it into <a href="https://qr-code-generator.com/" target="_blank">QR Generator</a><br>
-                5. Scan the generated QR with WhatsApp
+// QR Code endpoint - SHOWS ACTUAL TERMINAL QR CODE! 
+app.get('/qr', async (req, res) => {
+  try {
+    const QRCode = require('qrcode');
+    const whatsappService = require('./services/whatsapp');
+    
+    const currentQR = whatsappService.getCurrentQR();
+    const qrAge = whatsappService.getQRAge();
+    
+    if (!currentQR) {
+      res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>ZAPPO WhatsApp QR Code</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+                h1 { color: #25D366; }
+                .loading { color: #666; }
+            </style>
+            <script>setTimeout(() => window.location.reload(), 5000);</script>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 ZAPPO WhatsApp Bot</h1>
+                <h2>📱 QR Code Authentication</h2>
+                <div class="loading">
+                    ⏳ Waiting for QR code to be generated...<br>
+                    The bot might be starting up or already connected.<br><br>
+                    <strong>This page will auto-refresh in 5 seconds</strong>
+                </div>
             </div>
-            
-            <div class="logs-section">
-                <h3>📊 Where to Find QR Code:</h3>
-                <p>Go to your Render dashboard → Logs → Look for:</p>
-                <code>� QR CODE FOR WHATSAPP AUTHENTICATION:</code><br>
-                <code>2@ABC123XYZ... (long string)</code>
-            </div>
-            
-            <div class="instructions">
-                <strong>⏰ QR Code expires every 20 seconds</strong><br>
-                Fresh QR codes generate automatically every 30 seconds
-            </div>
-            
-            <button class="refresh-btn" onclick="window.location.reload()">🔄 Refresh Page</button>
-            
-            <p><small>This page auto-refreshes every 10 seconds</small></p>
-        </div>
-    </body>
-    </html>
-  `);
+        </body>
+        </html>
+      `);
+      return;
+    }
+    
+    // Check if QR is too old (over 25 seconds)
+    const isExpired = qrAge > 25000;
+    
+    // Generate QR code as data URL - THIS IS THE EXACT SAME QR FROM TERMINAL
+    const qrDataURL = await QRCode.toDataURL(currentQR, {
+      width: 400,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#FFFFFF'
+      }
+    });
+    
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <title>ZAPPO WhatsApp QR Code</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <style>
+              body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+              .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+              .qr-container { background: white; padding: 20px; border-radius: 10px; margin: 20px 0; display: inline-block; }
+              .qr-image { border: 2px solid #25D366; border-radius: 10px; }
+              .timer { background: ${isExpired ? '#ffe7e7' : '#e8f5e8'}; padding: 10px; border-radius: 8px; margin: 10px 0; }
+              h1 { color: #25D366; }
+              .refresh-btn { background: #25D366; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; margin: 10px; }
+              .refresh-btn:hover { background: #1fa855; }
+              .expired { color: #d32f2f; font-weight: bold; }
+              .valid { color: #2e7d32; font-weight: bold; }
+          </style>
+          <script>
+              // Auto-refresh every 10 seconds to get fresh QR
+              setTimeout(() => window.location.reload(), 10000);
+          </script>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🤖 ZAPPO WhatsApp Bot</h1>
+              <h2>📱 Scan this QR Code</h2>
+              
+              <div class="qr-container">
+                  <img src="${qrDataURL}" alt="WhatsApp QR Code" class="qr-image" width="400" height="400">
+              </div>
+              
+              <div class="timer ${isExpired ? 'expired' : 'valid'}">
+                  <span id="timer">
+                      ${isExpired ? '❌ QR Code Expired - Please refresh' : `⏰ Expires in ${Math.max(0, 20 - Math.floor(qrAge / 1000))} seconds`}
+                  </span>
+              </div>
+              
+              <button class="refresh-btn" onclick="window.location.reload()">
+                  🔄 Refresh QR Code
+              </button>
+              
+              <div style="margin-top: 20px; color: #666; font-size: 14px;">
+                  This page auto-refreshes every 10 seconds
+              </div>
+          </div>
+      </body>
+      </html>
+    `);
+    
+  } catch (error) {
+    logger.error('❌ Error serving QR code:', error);
+    res.status(500).send(`
+      <h1>Error Loading QR Code</h1>
+      <p>Please try refreshing the page.</p>
+      <button onclick="window.location.reload()">Refresh</button>
+    `);
+  }
 });
 
 async function startZappo() {

@@ -22,15 +22,16 @@ const MAX_NETWORK_BACKOFF_MS = 5 * 60 * 1000;
 // SOLUTION: Track server startup time to ignore old messages
 const SERVER_START_TIME = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
 
-// CRITICAL: Clear all existing WhatsApp sessions to prevent conflicts
+// Store current QR code for web endpoint
+let currentQRCode = null;
+let qrGeneratedAt = null;
+
+// Clear WhatsApp sessions when needed
 async function clearAllWhatsAppSessions() {
   try {
-    logger.info('🧹 Clearing all WhatsApp sessions to prevent conflicts...');
-    
-    // Remove auth directory completely
+    // Remove auth directory if exists
     if (fs.existsSync('auth')) {
       fs.rmSync('auth', { recursive: true, force: true });
-      logger.info('✅ Auth directory cleared');
     }
     
     // Clear any session files
@@ -38,12 +39,11 @@ async function clearAllWhatsAppSessions() {
     for (const file of sessionFiles) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
-        logger.info(`✅ ${file} removed`);
       }
     }
     
-    // Wait a moment for cleanup
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Wait for cleanup
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
   } catch (error) {
     logger.warn('⚠️ Could not clear sessions:', error.message);
@@ -72,15 +72,9 @@ const initializeWhatsApp = async () => {
     isConnecting = true;
     logger.info('📱 Initializing WhatsApp connection...');
     
-    // FORCE FRESH SESSION: Always clear sessions on server startup for fresh QR
-    logger.info('🔄 Forcing fresh session for new QR code generation...');
-    await clearAllWhatsAppSessions();
-    conflictCount = 0;
-    reconnectAttempts = 0;
-    
-    // CRITICAL: Clear sessions if we've had too many conflicts
+    // Clear sessions only if we've had conflicts
     if (conflictCount >= MAX_CONFLICT_ATTEMPTS) {
-      logger.warn('🚨 Too many conflicts detected. Clearing all sessions...');
+      logger.warn('🚨 Too many conflicts detected. Clearing sessions...');
       await clearAllWhatsAppSessions();
       conflictCount = 0;
       reconnectAttempts = 0;
@@ -133,6 +127,10 @@ const initializeWhatsApp = async () => {
       const { connection, lastDisconnect, qr } = update;
       
       if (qr) {
+        // Store QR code for web endpoint
+        currentQRCode = qr;
+        qrGeneratedAt = Date.now();
+        
         logger.info('📱 QR Code generated - please scan with WhatsApp');
         
         // Log QR code as copyable text for server environments
@@ -161,26 +159,6 @@ const initializeWhatsApp = async () => {
             }
           }
         }, 20000);
-        
-        // Force complete session restart every 30 seconds if not connected (for stuck QR)
-        setTimeout(async () => {
-          if (!isConnected) {
-            logger.info('⚡ Forcing complete session restart for fresh QR code...');
-            if (sock && typeof sock.end === 'function') {
-              try {
-                sock.end();
-              } catch (e) {
-                // Ignore end errors
-              }
-              sock = null;
-            }
-            isConnecting = false;
-            await clearAllWhatsAppSessions();
-            setTimeout(() => {
-              initializeWhatsApp();
-            }, 2000);
-          }
-        }, 30000);
       }
       
       if (connection === 'close') {
@@ -664,6 +642,8 @@ module.exports = {
   logout,
   resetSession, // NEW: Export the reset function
   forceDisconnect, // NEW: Export the force disconnect function
+  getCurrentQR: () => currentQRCode, // NEW: Export current QR code
+  getQRAge: () => qrGeneratedAt ? Date.now() - qrGeneratedAt : null, // NEW: QR age
   on: (eventName, handler) => appEvents.on(eventName, handler),
   emit: (eventName, data) => appEvents.emit(eventName, data)
 };
