@@ -166,8 +166,12 @@ const initializeWhatsApp = async () => {
         setTimeout(async () => {
           if (!isConnected) {
             logger.info('⚡ Forcing complete session restart for fresh QR code...');
-            if (sock) {
-              sock.end().catch(() => {});
+            if (sock && typeof sock.end === 'function') {
+              try {
+                sock.end();
+              } catch (e) {
+                // Ignore end errors
+              }
               sock = null;
             }
             isConnecting = false;
