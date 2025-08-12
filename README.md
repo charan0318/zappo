@@ -292,7 +292,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/your-repo/zappo/issues)
 - **Documentation**: [Wiki](https://github.com/your-repo/zappo/wiki)
-- **Discord**: [Join our community](https://discord.gg/zappo)
 
 ## 🙏 Acknowledgments
 
@@ -303,6 +302,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Made with ❤️ for the crypto community**
+**Made with ❤️ for the AVAX community**
 
 *ZAPPO - Bringing crypto to where people already are*
