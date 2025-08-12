@@ -156,7 +156,9 @@ const initializeWhatsApp = async () => {
         setTimeout(() => {
           if (!isConnected && sock && sock.ws && sock.ws.readyState === 1) {
             logger.info('🔄 Auto-refreshing QR code for fresh attempt...');
-            sock.logout().catch(() => {});
+            if (sock && sock.logout) {
+              sock.logout().catch(() => {});
+            }
           }
         }, 20000);
         
