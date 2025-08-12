@@ -72,6 +72,12 @@ const initializeWhatsApp = async () => {
     isConnecting = true;
     logger.info('📱 Initializing WhatsApp connection...');
     
+    // FORCE FRESH SESSION: Always clear sessions on server startup for fresh QR
+    logger.info('🔄 Forcing fresh session for new QR code generation...');
+    await clearAllWhatsAppSessions();
+    conflictCount = 0;
+    reconnectAttempts = 0;
+    
     // CRITICAL: Clear sessions if we've had too many conflicts
     if (conflictCount >= MAX_CONFLICT_ATTEMPTS) {
       logger.warn('🚨 Too many conflicts detected. Clearing all sessions...');
@@ -138,11 +144,37 @@ const initializeWhatsApp = async () => {
         console.log('📋 COPY THE TEXT ABOVE AND PASTE IT INTO:');
         console.log('🔗 https://qr-code-generator.com/');
         console.log('🔗 https://www.qr-code-generator.org/');
-        console.log('📱 Then scan the generated QR with WhatsApp');
+        console.log('📱 Then scan the generated QR with WhatsApp IMMEDIATELY');
+        console.log('⏰ QR Code expires in 20 seconds');
+        console.log('🔄 Fresh QR will auto-generate every 30 seconds if not connected');
         console.log('='.repeat(60));
         
         // Also show visual QR (might be broken in server logs)
         qrcode.generate(qr, { small: true });
+        
+        // Auto-refresh QR code every 20 seconds for server environments
+        setTimeout(() => {
+          if (!isConnected && sock && sock.ws && sock.ws.readyState === 1) {
+            logger.info('🔄 Auto-refreshing QR code for fresh attempt...');
+            sock.logout().catch(() => {});
+          }
+        }, 20000);
+        
+        // Force complete session restart every 30 seconds if not connected (for stuck QR)
+        setTimeout(async () => {
+          if (!isConnected) {
+            logger.info('⚡ Forcing complete session restart for fresh QR code...');
+            if (sock) {
+              sock.end().catch(() => {});
+              sock = null;
+            }
+            isConnecting = false;
+            await clearAllWhatsAppSessions();
+            setTimeout(() => {
+              initializeWhatsApp();
+            }, 2000);
+          }
+        }, 30000);
       }
       
       if (connection === 'close') {
