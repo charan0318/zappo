@@ -91,6 +91,92 @@ app.get('/', (req, res) => {
   });
 });
 
+// QR Code endpoint - GENIUS IDEA! 
+app.get('/qr', (req, res) => {
+  const { getCurrentQR, isWhatsAppConnected } = require('./services/whatsapp');
+  
+  if (isWhatsAppConnected()) {
+    res.json({
+      status: 'connected',
+      message: 'WhatsApp is already connected!',
+      connected: true
+    });
+    return;
+  }
+
+  const currentQR = getCurrentQR();
+  if (!currentQR) {
+    res.json({
+      status: 'no_qr',
+      message: 'No QR code available. Bot might be connecting...',
+      refresh: 'Refresh this page in a few seconds'
+    });
+    return;
+  }
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ZAPPO WhatsApp QR Code</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f0f0f0; }
+            .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+            .qr-container { margin: 20px 0; }
+            .qr-code { max-width: 300px; margin: 20px auto; border: 2px solid #25D366; border-radius: 10px; padding: 10px; background: white; }
+            .instructions { background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0; }
+            .timer { background: #fff3cd; padding: 10px; border-radius: 5px; margin: 10px 0; }
+            h1 { color: #25D366; }
+            .refresh-btn { background: #25D366; color: white; padding: 10px 20px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; margin: 10px; }
+            .refresh-btn:hover { background: #1fa855; }
+        </style>
+        <script>
+            // Auto-refresh every 15 seconds
+            setTimeout(() => window.location.reload(), 15000);
+        </script>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🤖 ZAPPO WhatsApp Bot</h1>
+            <h2>📱 Scan QR Code to Connect</h2>
+            
+            <div class="instructions">
+                <strong>📋 How to Connect:</strong><br>
+                1. Open WhatsApp on your phone<br>
+                2. Go to Settings → Linked Devices<br>
+                3. Tap "Link a Device"<br>
+                4. Scan the QR code below
+            </div>
+            
+            <div class="timer">
+                ⏰ QR Code expires in ~20 seconds. Page auto-refreshes every 15 seconds.
+            </div>
+            
+            <div class="qr-container">
+                <div id="qrcode"></div>
+            </div>
+            
+            <button class="refresh-btn" onclick="window.location.reload()">🔄 Refresh QR Code</button>
+            
+            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+            <script>
+                const qrData = '${currentQR}';
+                QRCode.toCanvas(document.getElementById('qrcode'), qrData, {
+                    width: 256,
+                    margin: 2,
+                    color: {
+                        dark: '#000000',
+                        light: '#FFFFFF'
+                    }
+                });
+            </script>
+        </div>
+    </body>
+    </html>
+  `);
+});
+
 async function startZappo() {
   try {
     console.log('🚀 Starting ZAPPO WhatsApp AVAX Wallet Bot...');
