@@ -8,6 +8,8 @@ const { users } = require('../services/database');
 const config = require('../config');
 const nebulaChat = require('../services/nebulaChat');
 const whatsappService = require('../services/whatsapp');
+const errorHandler = require('../utils/errorHandler');
+const errorRecovery = require('../utils/errorRecovery');
 
 // Inject sendMessage function and shared state into handlers
 const injectSendMessage = (sendMessageFunc, pendingTransactions) => {
@@ -90,38 +92,9 @@ class CommandHandler {
         return;
       }
       
-      // NEW: Handle RESET command for session conflicts
-      if (parsed.intent === 'RESET') {
-        // Only allow reset from admin numbers (you can customize this)
-        if (phone === config.adminPhone || phone === '919489042245') {
-          await this.sendMessage(from, '🔄 Resetting WhatsApp session to resolve conflicts...');
-          try {
-            await whatsappService.resetSession();
-            await this.sendMessage(from, '✅ Session reset initiated. Please wait for reconnection...');
-          } catch (error) {
-            logger.error('Error resetting session:', error);
-            await this.sendMessage(from, '❌ Failed to reset session. Please try again.');
-          }
-          return;
-        } else {
-          await this.sendMessage(from, '❌ You are not authorized to reset the session.');
-          return;
-        }
-      }
-      
-      // NEW: Handle STATUS command to check connection
-      if (parsed.intent === 'STATUS') {
-        const status = whatsappService.getConnectionStatus();
-        const info = whatsappService.getConnectionInfo();
-        
-        let statusMessage = `📱 WhatsApp Status: ${status}\n`;
-        if (info) {
-          statusMessage += `🔗 Connection: ${info.connection}\n`;
-          statusMessage += `📊 Reconnect Attempts: ${info.reconnectAttempts}\n`;
-          statusMessage += `⚠️ Conflict Count: ${info.conflictCount || 0}\n`;
-        }
-        
-        await this.sendMessage(from, statusMessage);
+      // Admin-only commands (STATUS and RESET)
+      if (this.isAdminCommand(text)) {
+        await this.handleAdminCommand(from, phone, text);
         return;
       }
       
@@ -129,8 +102,25 @@ class CommandHandler {
       await this.routeCommand(from, phone, parsed);
       
     } catch (error) {
-      logger.error('Error handling message:', error);
-      await this.sendMessage(messageData.from, '❌ Sorry, something went wrong. Please try again.');
+      const errorInfo = errorHandler.handleError(error, {
+        action: 'handle_message',
+        phone: this.extractPhoneNumber(messageData.from),
+        message: messageData.text
+      });
+      
+      // Create enhanced error message with recovery options
+      const enhancedMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
+      
+      await this.sendMessage(messageData.from, enhancedMessage);
+      
+      // If it's a high severity error, log additional details
+      if (errorInfo.severity === 'high') {
+        logger.error('High severity error in message handling:', {
+          phone: this.extractPhoneNumber(messageData.from),
+          error: error.message,
+          stack: error.stack
+        });
+      }
     }
   }
 
@@ -432,25 +422,6 @@ You can type cancel to stop anytime.`);
     try {
       const pendingTx = this.pendingTransactions.get(phone);
       
-      // Handle small amount confirmation specifically
-      if (pendingTx.type === 'small_amount_confirmation') {
-        if (commandParser.isConfirmation(text)) {
-          // User confirmed despite small amount warning
-          logger.info(`Small amount transaction confirmed by ${phone} with: ${text}`);
-          this.pendingTransactions.delete(phone);
-          await transactionHandler.handleSendTransaction(from, phone, pendingTx.originalParams);
-        } else if (commandParser.isCancellation(text)) {
-          // User cancelled the small amount transaction
-          logger.info(`Small amount transaction cancelled by ${phone} with: ${text}`);
-          this.pendingTransactions.delete(phone);
-          await this.sendMessage(from, '❌ Transaction cancelled. Consider sending a larger amount for better success rate.');
-        } else {
-          // Invalid response for small amount confirmation
-          await this.sendMessage(from, '❓ Please react with 👍 to proceed anyway or 👎 to cancel the small amount transaction.');
-        }
-        return;
-      }
-      
       // Handle regular transaction confirmations
       if (commandParser.isConfirmation(text)) {
         // User confirmed the transaction
@@ -683,6 +654,101 @@ I didn't understand that command. Here are some things you can try:
 • "send 1 AVAX to 0x..." - Send AVAX to address
 
 Need help? Type \`/help\` for a full list of commands!`;
+  }
+
+  // Check if command is admin-only
+  isAdminCommand(text) {
+    const command = text.toLowerCase().trim();
+    return command === '/status' || command === '/reset' || command.startsWith('/admin');
+  }
+
+  // Handle admin commands with authorization
+  async handleAdminCommand(from, phone, text) {
+    // Define admin phone numbers (replace with actual admin numbers)
+    const adminNumbers = [
+      '919489042245', // Replace with actual admin phone numbers
+      // Add more admin numbers as needed
+    ];
+    
+    if (!adminNumbers.includes(phone)) {
+      await this.sendMessage(from, '❌ Access denied. This command is restricted to administrators only.');
+      logger.warn(`Unauthorized admin command attempt from ${phone}: ${text}`);
+      return;
+    }
+    
+    const command = text.toLowerCase().trim();
+    
+    try {
+      switch (command) {
+        case '/status':
+          await this.handleStatusCommand(from, phone);
+          break;
+        case '/reset':
+          await this.handleResetCommand(from, phone);
+          break;
+        default:
+          await this.sendMessage(from, '❌ Unknown admin command. Available: /status, /reset');
+      }
+      
+      logger.info(`Admin command executed by ${phone}: ${command}`);
+      
+    } catch (error) {
+      logger.error(`Error executing admin command ${command}:`, error);
+      await this.sendMessage(from, `❌ Error executing admin command: ${error.message}`);
+    }
+  }
+
+  // Handle status command for admins
+  async handleStatusCommand(from, phone) {
+    try {
+      const stats = {
+        userStates: this.userStates.size,
+        pendingTransactions: this.pendingTransactions.size,
+        uptime: process.uptime(),
+        memory: process.memoryUsage()
+      };
+      
+      const response = `🔧 *ZAPPO Admin Status*
+
+👥 *Active User States:* ${stats.userStates}
+⏳ *Pending Transactions:* ${stats.pendingTransactions}
+⏱️ *Uptime:* ${Math.floor(stats.uptime / 3600)}h ${Math.floor((stats.uptime % 3600) / 60)}m
+💾 *Memory Usage:* ${Math.round(stats.memory.heapUsed / 1024 / 1024)}MB / ${Math.round(stats.memory.heapTotal / 1024 / 1024)}MB
+
+🕐 *Timestamp:* ${new Date().toISOString()}`;
+
+      await this.sendMessage(from, response);
+      
+    } catch (error) {
+      logger.error('Error in status command:', error);
+      await this.sendMessage(from, `❌ Error retrieving status: ${error.message}`);
+    }
+  }
+
+  // Handle reset command for admins
+  async handleResetCommand(from, phone) {
+    try {
+      const beforeStates = this.userStates.size;
+      const beforeTransactions = this.pendingTransactions.size;
+      
+      this.userStates.clear();
+      this.pendingTransactions.clear();
+      
+      const response = `🔄 *ZAPPO Admin Reset Complete*
+
+✅ *Cleared:*
+• User States: ${beforeStates} → 0
+• Pending Transactions: ${beforeTransactions} → 0
+
+🕐 *Reset at:* ${new Date().toISOString()}`;
+
+      await this.sendMessage(from, response);
+      logger.info(`Admin reset executed by ${phone}`);
+      
+    } catch (error) {
+      logger.error('Error in reset command:', error);
+      await this.sendMessage(from, `❌ Error executing reset: ${error.message}`);
+    }
   }
 }
 

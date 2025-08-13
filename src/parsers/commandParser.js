@@ -25,7 +25,8 @@ class CommandParser {
       HELP: /^(help|commands|what\s+can\s+you\s+do)/i,
       
       // Session management
-      STATUS: /^(status|connection|connected|whatsapp\s+status)/i,
+      // Remove STATUS from user commands - admin only
+      // STATUS: /^(status|connection|connected|whatsapp\s+status)/i,
       
       // Natural language variations
       NATURAL_SEND: /^(can\s+you\s+)?(send|transfer|pay)\s+(.+)/i,
@@ -40,7 +41,8 @@ class CommandParser {
       '/backup': 'BACKUP_WALLET',
       '/send': 'SEND_COMMAND',
       '/addcontact': 'ADD_CONTACT',
-      '/status': 'STATUS'
+      // Remove /status from user commands - admin only  
+      // '/status': 'STATUS'
     };
   }
   
@@ -220,9 +222,6 @@ class CommandParser {
 *Contacts:*
 • \`/addcontact name 0xaddress\` - Save contact
 • "contacts" - List saved contacts
-
-*System Commands:*
-• \`/status\` - Check WhatsApp connection status
 
 *Examples:*
 • "send 1 AVAX to 0x1234..."

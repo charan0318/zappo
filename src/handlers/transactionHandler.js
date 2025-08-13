@@ -3,6 +3,8 @@ const walletHandler = require('./walletHandler');
 const claimsService = require('../services/claims');
 const { users, transactions } = require('../services/database');
 const { logger, logUserAction, logTransaction } = require('../utils/logger');
+const errorHandler = require('../utils/errorHandler');
+const errorRecovery = require('../utils/errorRecovery');
 
 class TransactionHandler {
   constructor() {
@@ -12,406 +14,334 @@ class TransactionHandler {
   // Handle balance check request
   async handleGetBalance(from, phone) {
     try {
-      // Get user wallet
-      const wallet = await walletHandler.getUserWallet(phone);
-      if (!wallet) {
-        await this.sendMessage(from, 'You don’t have a wallet yet. Would you like me to create one for you now, or do you want to import an existing one?');
-        return;
-      }
-      
-      // Format balance
-      const balance = parseFloat(wallet.balance).toFixed(6);
-      const hasZeroBalance = parseFloat(balance) === 0;
-      
-      if (hasZeroBalance) {
-        await this.sendMessage(from, `💰 *Wallet Balance*
+      // Use retry mechanism for critical operations
+      const result = await errorHandler.withRetry(async () => {
+        // Get user wallet
+        const wallet = await walletHandler.getUserWallet(phone);
+        if (!wallet) {
+          throw new Error('Wallet not found. Please create a wallet first.');
+        }
 
-🏦 *Address:* \`${wallet.address}\`
-💎 *Balance:* ${balance} AVAX
-
-⚠️ *Your wallet is empty!*
-💡 *To start sending AVAX, please deposit some AVAX to your wallet first.*
-
-📋 *Your wallet address for deposits:*`);
+        // Get fresh balance from blockchain
+        const currentBalance = await nebulaService.getBalance(wallet.address);
         
-        // Send address as separate message for easy copying
-        await this.sendMessage(from, `\`${wallet.address}\`\n\n*Tap to copy this address!*`);
-      } else {
-        await this.sendMessage(from, `💰 *Wallet Balance*
-
-🏦 *Address:* \`${wallet.address}\`
-💎 *Balance:* ${balance} AVAX
-
-💡 *Tip:* Use \`/history\` to see your recent transactions.`);
-      }
+        // Update wallet balance in database
+        await users.updateUserWallet(phone, { balance: currentBalance.toString() });
+        
+        return { wallet, currentBalance };
+      }, 3, 1000);
       
-      logUserAction(phone, 'balance_checked', { balance });
+      // Log the balance check
+      logUserAction(phone, 'balance_check', { balance: result.currentBalance });
+      
+      await this.sendMessage(from, `💰 *Current Balance*\n\n${result.currentBalance.toFixed(6)} AVAX\n\n📍 Wallet: \`${result.wallet.address}\``);
       
     } catch (error) {
-      logger.error('Error getting balance:', error);
-      await this.sendMessage(from, `❌ Error getting balance: ${error.message}`);
+      const errorInfo = errorHandler.handleError(error, { 
+        action: 'get_balance', 
+        phone,
+        from 
+      });
+      
+      const userMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
+      await this.sendMessage(from, userMessage);
     }
   }
   
   // Handle transaction history request
-  async handleGetHistory(from, phone) {
+  async handleGetTransactions(from, phone, limit = 10) {
     try {
-      // Get user wallet
-      const wallet = await walletHandler.getUserWallet(phone);
-      if (!wallet) {
-        await this.sendMessage(from, '❌ You need to create a wallet first! Send "create wallet" to get started.');
-        return;
-      }
-      
-      // Get recent transactions from database
-      const dbTransactions = await transactions.findTransactionsByUser(phone, 10);
-      
-      // Skip blockchain scanning for now as it's too slow - rely on database
-      let allTransactions = dbTransactions;
-      
-      // If no database transactions, try a quick blockchain check
-      if (dbTransactions.length === 0) {
-        try {
-          // Quick timeout for blockchain check
-          const blockchainTxs = await Promise.race([
-            nebulaService.getAddressTransactions(wallet.address, 3),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-          ]);
-          allTransactions = blockchainTxs;
-        } catch (error) {
-          logger.warn('Blockchain transaction lookup timed out, showing database only');
-          allTransactions = dbTransactions;
+      const result = await errorHandler.withRetry(async () => {
+        // Get user wallet
+        const wallet = await walletHandler.getUserWallet(phone);
+        if (!wallet) {
+          throw new Error('Wallet not found. Please create a wallet first.');
         }
-      }
-      
-      // Combine and format transactions
-      allTransactions = allTransactions
-        .sort((a, b) => new Date(b.timestamp || b.created_at) - new Date(a.timestamp || a.created_at))
-        .slice(0, 5);
-      
-      if (allTransactions.length === 0) {
-        await this.sendMessage(from, `📋 *Transaction History*
 
-🏦 *Address:* \`${wallet.address}\`
-📝 *Status:* No transactions found
-
-Your wallet is ready for transactions!`);
+        // Get recent transactions
+        const recentTxs = await transactions.getRecentTransactions(phone, limit);
+        return { wallet, recentTxs };
+      }, 2, 500);
+      
+      if (result.recentTxs.length === 0) {
+        await this.sendMessage(from, '📊 *Transaction History*\n\nNo transactions found yet.\n\nStart by sending some AVAX or receiving payments!');
         return;
       }
+
+      let historyMessage = `📊 *Recent Transactions*\n\n`;
       
-      let historyMessage = `📋 *Recent Transactions*\n\n`;
-      
-      for (const tx of allTransactions) {
-        const timestamp = new Date(tx.timestamp || tx.created_at).toLocaleString();
-        const amount = tx.amount || tx.value || '0';
-        const status = tx.status || 'completed';
-        const type = tx.type || (tx.from === wallet.address ? 'outgoing' : 'incoming');
-        const hash = tx.tx_hash || tx.hash;
+      for (const tx of result.recentTxs) {
+        const date = new Date(tx.timestamp).toLocaleDateString();
+        const type = tx.from_address?.toLowerCase() === result.wallet.address.toLowerCase() ? '📤 Sent' : '📥 Received';
+        const amount = parseFloat(tx.amount_avax || 0).toFixed(4);
         
-        const statusEmoji = status === 'success' || status === 'completed' ? '✅' : 
-                           status === 'pending' ? '⏳' : '❌';
-        const typeEmoji = type === 'outgoing' ? '📤' : '📥';
-        
-        historyMessage += `${statusEmoji} ${typeEmoji} *${amount} AVAX* (${type})\n`;
-        historyMessage += `📅 ${timestamp}\n`;
-        historyMessage += `🔗 [View on Explorer](https://snowtrace.io/tx/${hash})\n\n`;
+        historyMessage += `${type}: ${amount} AVAX\n`;
+        historyMessage += `📅 ${date}\n`;
+        if (tx.tx_hash) {
+          historyMessage += `🔗 [View](https://snowtrace.io/tx/${tx.tx_hash})\n`;
+        }
+        historyMessage += `\n`;
       }
       
-      historyMessage += `🏦 *Address:* \`${wallet.address}\``;
+      // Log the transaction history request
+      logUserAction(phone, 'transaction_history', { count: result.recentTxs.length });
       
       await this.sendMessage(from, historyMessage);
       
-      logUserAction(phone, 'history_checked', { transactionCount: allTransactions.length });
-      
     } catch (error) {
-      logger.error('Error getting transaction history:', error);
-      await this.sendMessage(from, `❌ Error getting transaction history: ${error.message}`);
+      const errorInfo = errorHandler.handleError(error, { 
+        action: 'get_transactions', 
+        phone,
+        from,
+        limit 
+      });
+      
+      const userMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
+      await this.sendMessage(from, userMessage);
     }
   }
-  
+
   // Handle send transaction request
   async handleSendTransaction(from, phone, sendParams) {
     try {
-      // Get user wallet
-      const wallet = await walletHandler.getUserWallet(phone);
-      if (!wallet) {
-        await this.sendMessage(from, '❌ You need to create a wallet first! Send "create wallet" to get started.');
-        return;
+      logger.info(`Processing send transaction for ${phone}:`, sendParams);
+      
+      // Validate input parameters
+      if (!sendParams || !sendParams.amount) {
+        throw new Error('Missing parameters. Please provide amount and recipient.');
       }
-      
-      // Validate recipient
-      let recipientAddress = sendParams.recipient;
-      let recipientPhone = null;
-      
-      // If not a valid address, see if it's a saved contact or a phone number
-      if (!nebulaService.validateAddress(recipientAddress)) {
-        const contact = await this.getContactByPhone(phone, recipientAddress);
-        if (contact) {
-          recipientAddress = contact.address;
-        } else {
-          const phoneLike = recipientAddress.replace(/\D/g, '');
-          if (phoneLike.length >= 8) {
-            recipientPhone = phoneLike;
-          } else {
-            await this.sendMessage(from, 'That recipient isn’t valid yet. Please share a contact who uses ZAPPO, paste a 0x address, or provide a phone number.');
-            return;
-          }
-        }
-      }
-      
-      // Check if recipient is the same as sender
-      if (recipientAddress.toLowerCase() === wallet.address.toLowerCase()) {
-        await this.sendMessage(from, 'You can’t send AVAX to your own address.');
-        return;
-      }
-      
-      // Check balance
-      const currentBalance = parseFloat(wallet.balance);
+
       const sendAmount = parseFloat(sendParams.amount);
-      
-      if (sendAmount > currentBalance) {
-        await this.sendMessage(from, `Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`);
-        return;
+      if (isNaN(sendAmount) || sendAmount <= 0) {
+        throw new Error('Invalid amount. Amount must be greater than 0.');
       }
-      
-      // Warn about small amounts for unregistered recipients (claim-links)
-      if (recipientPhone && sendAmount < 0.01) {
-        await this.sendMessage(from, `⚠️ *Small Amount Warning*
 
-You're sending ${sendAmount} AVAX to an unregistered user.
+      const result = await errorHandler.withRetry(async () => {
+        // Get user wallet
+        const wallet = await walletHandler.getUserWallet(phone);
+        if (!wallet) {
+          throw new Error('Wallet not found. Please create a wallet first.');
+        }
 
-📊 *Gas Fee Info:*
-• Estimated claim gas: ~0.002 AVAX
-• Recommended minimum: 0.005 AVAX
-• Recipient will get: ~${Math.max(0, sendAmount - 0.002).toFixed(6)} AVAX
-
-💡 *Tip:* Send at least 0.005 AVAX for better claim success rate.
-
-Continue? React with 👍 (yes) or 👎 (cancel)`);
+        // Parse recipient details
+        const { recipientAddress, recipientPhone, name } = sendParams;
         
-        // Set user state to wait for confirmation
-        this.pendingTransactions.set(phone, {
-          type: 'small_amount_confirmation',
-          originalParams: sendParams,
-          timestamp: Date.now()
-        });
-        return;
-      }
-      
-      // Estimate gas (for direct send). For claim-link we’ll send to ephemeral wallet later
-      const gasEstimate = recipientPhone
-        ? { gasLimit: '21000', gasPrice: '0', estimatedCost: '0.0003' }
-        : await nebulaService.estimateGas(wallet.address, recipientAddress, sendAmount);
-      const totalCost = sendAmount + parseFloat(gasEstimate.estimatedCost);
-      
-      if (totalCost > currentBalance) {
-        await this.sendMessage(from, `You don’t have enough to cover amount + gas. Estimated total: ${totalCost.toFixed(6)} AVAX.`);
-        return;
-      }
-      
+        // Get fresh balance
+        const currentBalance = parseFloat(wallet.balance);
+        
+        if (sendAmount > currentBalance) {
+          throw new Error(`Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`);
+        }
+        
+        // Estimate gas (for direct send). For claim-link we'll send to ephemeral wallet later
+        const gasEstimate = recipientPhone
+          ? { gasLimit: '21000', gasPrice: '0', estimatedCost: '0.0003' }
+          : await nebulaService.estimateGas(wallet.address, recipientAddress, sendAmount);
+        
+        // For direct sends, user needs to cover amount + gas
+        // For claim-links, user only needs to cover the send amount (gas is paid during claim)
+        const totalCost = recipientPhone ? sendAmount : sendAmount + parseFloat(gasEstimate.estimatedCost);
+        
+        if (totalCost > currentBalance) {
+          const message = recipientPhone 
+            ? `Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`
+            : `You don't have enough to cover amount + gas. Estimated total: ${totalCost.toFixed(6)} AVAX.`;
+          throw new Error(message);
+        }
+        
+        return { wallet, recipientAddress, recipientPhone, name, currentBalance, gasEstimate, totalCost };
+      }, 2, 1000);
+
       // Create transaction summary
       const transactionData = {
-        from: wallet.address,
-        to: recipientAddress,
+        from: result.wallet.address,
+        to: result.recipientAddress,
         amount: sendAmount,
-        gasEstimate: gasEstimate,
-        totalCost: totalCost,
+        gasEstimate: result.gasEstimate,
+        totalCost: result.totalCost,
         phone: phone,
-        recipientPhone
+        recipientPhone: result.recipientPhone
       };
-      
-      // Store pending transaction (now shared with command handler)
-      this.pendingTransactions.set(phone, transactionData);
-      
-      // Send confirmation message
-      const recipientDisplay = this.formatAddress(recipientAddress);
-      const contactName = await this.getContactNameByPhone(phone, recipientAddress);
-      
-      if (recipientPhone) {
-        await this.sendMessage(from, `👤 This contact isn’t registered on ZAPPO yet.
 
-I can hold ${sendAmount} AVAX for 3 days so they can claim it.
-React with 👍 to proceed, or 👎 to cancel.`);
-      } else {
-        await this.sendMessage(from, `📤 *Review & Confirm*
-
-You are about to send funds on Avalanche C-Chain.
-
-💰 Amount: ${sendAmount} AVAX
-👤 To: ${contactName ? contactName : recipientDisplay}
-🏦 Address: \`${recipientAddress}\`
-⛽ Gas (est.): ~${parseFloat(gasEstimate.estimatedCost).toFixed(6)} AVAX
-💸 Total (est.): ${totalCost.toFixed(6)} AVAX
-
-React with 👍 to confirm or 👎 to cancel.
-(Or type "YES" to confirm / "NO" to cancel)`);
-      }
+      // Show confirmation
+      const recipientDisplay = result.name || result.recipientAddress || result.recipientPhone;
+      const feeDisplay = result.recipientPhone ? 'Free (claim-link)' : `${parseFloat(result.gasEstimate.estimatedCost).toFixed(6)} AVAX`;
       
-      logUserAction(phone, 'transaction_pending', { amount: sendAmount, to: recipientAddress });
+      const confirmMessage = `🔄 *Transaction Confirmation*
+
+💸 *Sending:* ${sendAmount} AVAX
+👤 *To:* ${recipientDisplay}
+⛽ *Gas Fee:* ${feeDisplay}
+💰 *Total Cost:* ${result.totalCost.toFixed(6)} AVAX
+
+${result.recipientPhone ? '📱 *Note:* Recipient will receive a claim link' : ''}
+
+Confirm? React with 👍 (yes) or 👎 (cancel)`;
+
+      await this.sendMessage(from, confirmMessage);
+      
+      // Store pending transaction
+      this.pendingTransactions.set(phone, {
+        type: 'send_transaction',
+        data: transactionData,
+        originalParams: sendParams,
+        timestamp: Date.now()
+      });
       
     } catch (error) {
-      logger.error('Error handling send transaction:', error);
-      await this.sendMessage(from, `❌ Error: ${error.message}`);
+      const errorInfo = errorHandler.handleError(error, { 
+        action: 'send_transaction', 
+        phone,
+        from,
+        sendParams 
+      });
+      
+      const userMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
+      await this.sendMessage(from, userMessage);
     }
   }
-  
-  // Execute pending transaction
-  async executePendingTransaction(from, phone, transactionData) {
+
+  // Execute confirmed transaction
+  async executePendingTransaction(from, phone, pendingTx) {
     try {
-      await this.sendMessage(from, 'Processing your transaction… this usually takes a moment.');
+      const { data, originalParams } = pendingTx;
       
-      // Get wallet provider
-      const walletProvider = await walletHandler.getWalletProvider(phone);
-      
-      let txResult;
-      
-      if (transactionData.recipientPhone) {
-        // Claim-link flow: create ephemeral wallet, move funds there, save claim, send link back
-        const privy = require('../services/privy');
-        const ephemeral = await privy.createWallet('ephemeral');
-        if (!ephemeral.success) {
-          throw new Error('Could not create claim wallet. Please try again later.');
+      const result = await errorHandler.withRetry(async () => {
+        // Get fresh wallet and balance
+        const wallet = await walletHandler.getUserWallet(phone);
+        const currentBalance = parseFloat(wallet.balance);
+        
+        // Double-check balance hasn't changed
+        if (data.totalCost > currentBalance) {
+          throw new Error('Insufficient balance. Your balance may have changed since confirmation.');
         }
-        const ephemeralWalletId = ephemeral.privyWalletId;
-        const ephemeralAddress = ephemeral.walletAddress;
-        
-        txResult = await nebulaService.sendTransaction(
-          walletProvider,
-          ephemeralAddress,
-          transactionData.amount,
-          transactionData.gasEstimate?.gasLimit || null
-        );
-        
-        const { link } = await claimsService.createHold({
-          senderPhone: phone,
-          senderAddress: transactionData.from,
-          recipientPhone: transactionData.recipientPhone,
-          amountAvax: transactionData.amount,
-          ephemeralWalletId,
-          ephemeralWalletAddress: ephemeralAddress,
-          holdTxHash: txResult.hash
-        });
-        
-        await this.sendMessage(from, `✅ Claim link created.
 
-💰 Amount: ${transactionData.amount} AVAX
-🔗 Hash: \`${txResult.hash}\`
-📊 View on Snowtrace: https://snowtrace.io/tx/${txResult.hash}
+        let txResult;
+        
+        if (data.recipientPhone) {
+          // Create claim link for unregistered user
+          txResult = await claimsService.createClaimLink(
+            phone,
+            data.recipientPhone,
+            data.amount,
+            originalParams.name || 'Unknown'
+          );
+          
+          if (!txResult.success) {
+            throw new Error(`Failed to create claim link: ${txResult.error}`);
+          }
+          
+          return { type: 'claim_link', result: txResult };
+        } else {
+          // Direct transaction to registered user
+          txResult = await nebulaService.sendTransaction(
+            wallet.address,
+            data.to,
+            data.amount
+          );
+          
+          if (!txResult || !txResult.hash) {
+            throw new Error('Transaction failed. Please try again.');
+          }
+          
+          return { type: 'direct', result: txResult };
+        }
+      }, 2, 2000);
 
-💡 *Note:* Gas fees for processing the claim will be deducted from this amount.
+      // Send success message based on transaction type
+      if (result.type === 'direct') {
+        await this.sendMessage(from, `✅ *Transaction Successful*
 
-Please forward this to your contact:
-Claim link: ${link}`);
+💸 *Sent:* ${data.amount} AVAX
+👤 *To:* ${data.to}
+⛽ *Gas:* ${parseFloat(data.gasEstimate.estimatedCost).toFixed(6)} AVAX
+🔗 *Transaction:* [View on Snowtrace](https://snowtrace.io/tx/${result.result.hash})`);
+
+        // Log successful transaction
+        logTransaction(phone, data.to, data.amount, 'sent', result.result.hash);
+        
+        // Update balances
+        await this.updateUserBalance(phone);
+        
       } else {
-        // Direct send
-        txResult = await nebulaService.sendTransaction(
-          walletProvider,
-          transactionData.to,
-          transactionData.amount,
-          transactionData.gasEstimate?.gasLimit || null
-        );
-        
-        await this.sendMessage(from, `✅ Transaction submitted!
+        await this.sendMessage(from, `✅ *Claim Link Created*
 
-💰 Amount: ${transactionData.amount} AVAX
-👤 To: \`${transactionData.to}\`
-🔗 Hash: \`${txResult.hash}\`
+💸 *Amount:* ${data.amount} AVAX
+📱 *Recipient:* ${data.recipientPhone}
+🔗 *Claim Link:* ${result.result.claimUrl}
 
-View on Snowtrace: https://snowtrace.io/tx/${txResult.hash}`);
+The recipient will be notified and can claim their AVAX!`);
+
+        // Log successful claim link creation
+        logTransaction(phone, data.recipientPhone, data.amount, 'claim_link_created', result.result.ephemeralAddress);
       }
       
-      // Save transaction to database
-      const txData = {
-        user_phone: phone,
-        tx_hash: txResult.hash,
-        from: txResult.from,
-        to: txResult.to,
-        amount: txResult.value,
-        status: 'pending',
-        gas_used: txResult.gasLimit,
-        gas_price: txResult.gasPrice
-      };
+    } catch (error) {
+      const errorInfo = errorHandler.handleError(error, { 
+        action: 'execute_transaction', 
+        phone,
+        from,
+        pendingTx 
+      });
       
-      await transactions.createTransaction(txData);
+      let userMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
       
-      // Send success message
-      await this.sendMessage(from, `✅ Transaction submitted!
+      // Add specific guidance for transaction failures
+      if (errorInfo.code.startsWith('TX_')) {
+        userMessage += '\n\n💡 *Tips:*\n' +
+          '• Check your internet connection\n' +
+          '• Try again during off-peak hours\n' +
+          '• Ensure sufficient balance for gas fees';
+      }
+      
+      await this.sendMessage(from, userMessage);
+    }
+  }
 
-💰 Amount: ${transactionData.amount} AVAX
-👤 To: \`${transactionData.to}\`
-🔗 Hash: \`${txResult.hash}\`
+  // Update user balance from blockchain
+  async updateUserBalance(phone) {
+    try {
+      await errorHandler.withRetry(async () => {
+        const wallet = await walletHandler.getUserWallet(phone);
+        if (!wallet) {
+          throw new Error('Wallet not found');
+        }
 
-View on Snowtrace: https://snowtrace.io/tx/${txResult.hash}`);
-      
-      logTransaction(txResult.hash, txResult.from, txResult.to, txResult.value, 'pending');
-      logUserAction(phone, 'transaction_sent', { hash: txResult.hash, amount: transactionData.amount });
-      
-      // Clear pending transaction
-      this.pendingTransactions.delete(phone);
+        const currentBalance = await nebulaService.getBalance(wallet.address);
+        await users.updateUserWallet(phone, { balance: currentBalance.toString() });
+        
+        return currentBalance;
+      }, 3, 1000);
       
     } catch (error) {
-      logger.error('Error executing transaction:', error);
-      await this.sendMessage(from, `We couldn’t send the transaction: ${error.message}`);
-      this.pendingTransactions.delete(phone);
+      // Silent fail for balance updates - don't interrupt user flow
+      logger.error('Failed to update user balance:', {
+        phone,
+        error: error.message
+      });
     }
   }
-  
-  // Get transaction status
-  async getTransactionStatus(txHash) {
+
+  // Send message helper
+  async sendMessage(from, message) {
     try {
-      const status = await nebulaService.getTransactionStatus(txHash);
-      return status;
+      if (this.messageHandler) {
+        await this.messageHandler(from, message);
+      }
     } catch (error) {
-      logger.error('Error getting transaction status:', error);
-      throw error;
+      logger.error('Failed to send message:', {
+        from,
+        message: message.substring(0, 100),
+        error: error.message
+      });
+      
+      // Don't throw - message sending failures shouldn't break the flow
     }
   }
-  
-  // Update transaction status in database
-  async updateTransactionStatus(txHash, status) {
-    try {
-      await transactions.updateTransactionStatus(txHash, status);
-    } catch (error) {
-      logger.error('Error updating transaction status:', error);
-    }
-  }
-  
-  // Get contact by name
-  async getContactByPhone(ownerPhone, name) {
-    try {
-      const { contacts } = require('../services/database');
-      return await contacts.findContactByName(ownerPhone, name);
-    } catch (error) {
-      logger.error('Error getting contact:', error);
-      return null;
-    }
-  }
-  
-  // Get contact name by address
-  async getContactNameByPhone(ownerPhone, address) {
-    try {
-      const { contacts } = require('../services/database');
-      const contact = await contacts.findContactByAddress(ownerPhone, address);
-      return contact ? contact.name : null;
-    } catch (error) {
-      logger.error('Error getting contact name:', error);
-      return null;
-    }
-  }
-  
-  // Format address for display
-  formatAddress(address) {
-    try {
-      return `${address.slice(0, 6)}...${address.slice(-4)}`;
-    } catch (error) {
-      return address;
-    }
-  }
-  
-  // Send message helper (this should be injected from command handler)
-  async sendMessage(to, message) {
-    // This will be overridden by the command handler
-    console.log(`[TRANSACTION] ${to}: ${message}`);
+
+  // Set message handler
+  setMessageHandler(handler) {
+    this.messageHandler = handler;
   }
 }
 

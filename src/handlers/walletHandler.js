@@ -2,6 +2,8 @@ const privyService = require('../services/privy');
 const nebulaService = require('../services/nebula');
 const { users } = require('../services/database');
 const { logger, logUserAction } = require('../utils/logger');
+const errorHandler = require('../utils/errorHandler');
+const errorRecovery = require('../utils/errorRecovery');
 
 class WalletHandler {
   // Create new wallet for user

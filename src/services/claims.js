@@ -120,30 +120,21 @@ class ClaimsService {
       const gasCost = parseFloat(gasEstimate.estimatedCost);
       const availableAmount = record.amount_avax;
       
-      // Calculate dynamic gas buffer based on amount size
-      const minGasBuffer = 0.0005; // Minimum 0.0005 AVAX
-      const dynamicGasBuffer = Math.max(minGasBuffer, availableAmount * 0.1); // 10% of amount or min buffer
-      const maxGasBuffer = 0.001; // Cap at 0.001 AVAX for small amounts
+      // Calculate dynamic gas buffer based on amount size - more permissive for small amounts
+      const minGasBuffer = 0.0001; // Further reduced minimum buffer
+      const dynamicGasBuffer = Math.max(minGasBuffer, availableAmount * 0.02); // Reduced to 2% buffer
+      const maxGasBuffer = 0.0003; // Further reduced cap for small amounts
       const gasBuffer = Math.min(dynamicGasBuffer, maxGasBuffer);
       
       const totalGasNeeded = gasCost + gasBuffer;
       
       logger.info(`Improved gas estimation: cost=${gasCost}, dynamicBuffer=${gasBuffer}, total=${totalGasNeeded}, available=${availableAmount}`);
       
-      // Better validation with clearer conditions
-      if (totalGasNeeded >= availableAmount * 0.9) { // If gas is more than 90% of amount
-        const recommendedMin = (totalGasNeeded * 1.5).toFixed(6);
-        logger.warn(`Amount too small for gas fees: required=${totalGasNeeded}, available=${availableAmount}, recommended=${recommendedMin}`);
-        throw new Error(`Amount too small for gas fees. Minimum recommended: ${recommendedMin} AVAX`);
-      }
+      // Removed gas percentage check - allow any transaction as long as user has sufficient balance
       
-      // Ensure minimum claimable amount after gas
+      // Reduced minimum claimable amount after gas
       const netAmount = availableAmount - totalGasNeeded;
-      if (netAmount < 0.0001) { // Minimum 0.0001 AVAX after gas
-        const recommendedMin = (totalGasNeeded + 0.0001).toFixed(6);
-        logger.warn(`Net amount too small after gas: net=${netAmount}, recommended=${recommendedMin}`);
-        throw new Error(`Amount too small after gas fees. Send at least ${recommendedMin} AVAX`);
-      }
+      // Removed minimum net amount check - allow any amount as long as user has balance
       
       // Calculate amount after deducting gas fees (use actual gas cost, not buffer)
       const transferAmount = availableAmount - gasCost;
