@@ -1,5 +1,6 @@
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode'); // For generating QR images
 const fs = require('fs');
 const path = require('path');
 const { Boom } = require('@hapi/boom');
@@ -18,6 +19,10 @@ const appEvents = new EventEmitter();
 const messageQueue = [];
 let networkBackoffMs = 5000;
 const MAX_NETWORK_BACKOFF_MS = 5 * 60 * 1000;
+
+// Store current QR code for web endpoint
+let currentQRCode = null;
+let qrCodeDataURL = null;
 
 // SOLUTION: Track server startup time to ignore old messages
 const SERVER_START_TIME = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
@@ -129,6 +134,21 @@ const initializeWhatsApp = async () => {
       if (qr) {
         logger.info('📱 QR Code generated - please scan with WhatsApp');
         qrcode.generate(qr, { small: true });
+        
+        // Store QR code for web endpoint
+        currentQRCode = qr;
+        try {
+          qrCodeDataURL = await QRCode.toDataURL(qr, {
+            width: 400,
+            margin: 2,
+            color: {
+              dark: '#000000',
+              light: '#FFFFFF'
+            }
+          });
+        } catch (error) {
+          logger.error('Failed to generate QR data URL:', error);
+        }
       }
       
       if (connection === 'close') {
@@ -203,6 +223,10 @@ const initializeWhatsApp = async () => {
         isConnecting = false;
         isConnected = true;
         networkBackoffMs = 5000; // reset backoff on success
+        
+        // Clear QR code when connected
+        currentQRCode = null;
+        qrCodeDataURL = null;
         
         // Process any queued messages
         if (messageQueue.length > 0) {
@@ -602,6 +626,15 @@ const forceDisconnect = async () => {
   }
 };
 
+// Function to get current QR code
+const getCurrentQRCode = () => {
+  return {
+    qr: currentQRCode,
+    dataURL: qrCodeDataURL,
+    isAvailable: !!currentQRCode
+  };
+};
+
 module.exports = {
   initializeWhatsApp,
   sendMessage,
@@ -612,6 +645,7 @@ module.exports = {
   logout,
   resetSession, // NEW: Export the reset function
   forceDisconnect, // NEW: Export the force disconnect function
+  getCurrentQRCode, // NEW: Export QR code getter
   on: (eventName, handler) => appEvents.on(eventName, handler),
   emit: (eventName, data) => appEvents.emit(eventName, data)
 };
