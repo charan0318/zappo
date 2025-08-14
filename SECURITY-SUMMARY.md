@@ -1,4 +1,4 @@
-# ZAPPO Security & Enhancement Summary
+    # ZAPPO Security & Enhancement Summary
 
 ## 🔐 Admin Command Security Implementation
 

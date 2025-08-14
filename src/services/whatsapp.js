@@ -22,16 +22,15 @@ const MAX_NETWORK_BACKOFF_MS = 5 * 60 * 1000;
 // SOLUTION: Track server startup time to ignore old messages
 const SERVER_START_TIME = Math.floor(Date.now() / 1000); // Unix timestamp in seconds
 
-// Store current QR code for web endpoint
-let currentQRCode = null;
-let qrGeneratedAt = null;
-
-// Clear WhatsApp sessions when needed
+// CRITICAL: Clear all existing WhatsApp sessions to prevent conflicts
 async function clearAllWhatsAppSessions() {
   try {
-    // Remove auth directory if exists
+    logger.info('🧹 Clearing all WhatsApp sessions to prevent conflicts...');
+    
+    // Remove auth directory completely
     if (fs.existsSync('auth')) {
       fs.rmSync('auth', { recursive: true, force: true });
+      logger.info('✅ Auth directory cleared');
     }
     
     // Clear any session files
@@ -39,11 +38,12 @@ async function clearAllWhatsAppSessions() {
     for (const file of sessionFiles) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
+        logger.info(`✅ ${file} removed`);
       }
     }
     
-    // Wait for cleanup
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Wait a moment for cleanup
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
   } catch (error) {
     logger.warn('⚠️ Could not clear sessions:', error.message);
@@ -72,9 +72,9 @@ const initializeWhatsApp = async () => {
     isConnecting = true;
     logger.info('📱 Initializing WhatsApp connection...');
     
-    // Clear sessions only if we've had conflicts
+    // CRITICAL: Clear sessions if we've had too many conflicts
     if (conflictCount >= MAX_CONFLICT_ATTEMPTS) {
-      logger.warn('🚨 Too many conflicts detected. Clearing sessions...');
+      logger.warn('🚨 Too many conflicts detected. Clearing all sessions...');
       await clearAllWhatsAppSessions();
       conflictCount = 0;
       reconnectAttempts = 0;
@@ -127,38 +127,8 @@ const initializeWhatsApp = async () => {
       const { connection, lastDisconnect, qr } = update;
       
       if (qr) {
-        // Store QR code for web endpoint
-        currentQRCode = qr;
-        qrGeneratedAt = Date.now();
-        
         logger.info('📱 QR Code generated - please scan with WhatsApp');
-        
-        // Log QR code as copyable text for server environments
-        console.log('='.repeat(60));
-        console.log('📱 QR CODE FOR WHATSAPP AUTHENTICATION:');
-        console.log('='.repeat(60));
-        console.log(qr);
-        console.log('='.repeat(60));
-        console.log('📋 COPY THE TEXT ABOVE AND PASTE IT INTO:');
-        console.log('🔗 https://qr-code-generator.com/');
-        console.log('🔗 https://www.qr-code-generator.org/');
-        console.log('📱 Then scan the generated QR with WhatsApp IMMEDIATELY');
-        console.log('⏰ QR Code expires in 20 seconds');
-        console.log('🔄 Fresh QR will auto-generate every 30 seconds if not connected');
-        console.log('='.repeat(60));
-        
-        // Also show visual QR (might be broken in server logs)
         qrcode.generate(qr, { small: true });
-        
-        // Auto-refresh QR code every 20 seconds for server environments
-        setTimeout(() => {
-          if (!isConnected && sock && sock.ws && sock.ws.readyState === 1) {
-            logger.info('🔄 Auto-refreshing QR code for fresh attempt...');
-            if (sock && sock.logout) {
-              sock.logout().catch(() => {});
-            }
-          }
-        }, 20000);
       }
       
       if (connection === 'close') {
@@ -550,7 +520,7 @@ function parsePhonesFromVcard(vcard) {
 
 const logout = async () => {
   try {
-    if (sock && typeof sock.logout === 'function') {
+    if (sock) {
       logger.info('📱 Logging out from WhatsApp...');
       await sock.logout();
       sock = null;
@@ -576,7 +546,7 @@ const resetSession = async () => {
     logger.info('🔄 Manually resetting WhatsApp session...');
     
     // Disconnect if connected
-    if (sock && typeof sock.logout === 'function') {
+    if (sock) {
       try {
         await sock.logout();
       } catch (e) {
@@ -610,7 +580,7 @@ const forceDisconnect = async () => {
   try {
     logger.info('🚨 Force disconnecting WhatsApp...');
     
-    if (sock && typeof sock.end === 'function') {
+    if (sock) {
       try {
         sock.end();
       } catch (e) {
@@ -642,8 +612,6 @@ module.exports = {
   logout,
   resetSession, // NEW: Export the reset function
   forceDisconnect, // NEW: Export the force disconnect function
-  getCurrentQR: () => currentQRCode, // NEW: Export current QR code
-  getQRAge: () => qrGeneratedAt ? Date.now() - qrGeneratedAt : null, // NEW: QR age
   on: (eventName, handler) => appEvents.on(eventName, handler),
   emit: (eventName, data) => appEvents.emit(eventName, data)
 };

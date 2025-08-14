@@ -18,12 +18,12 @@ class KeepAlive {
 
     async ping() {
         try {
-            const response = await axios.get(`${this.appUrl}/health`, {
+            const response = await axios.get(${this.appUrl}/health, {
                 timeout: 10000 // 10 second timeout
             });
-            logger.info(`🏓 Keep-alive ping successful - Status: ${response.status}`);
+            logger.info(🏓 Keep-alive ping successful - Status: );
         } catch (error) {
-            logger.warn(`⚠️ Keep-alive ping failed: ${error.message}`);
+            logger.warn(⚠️ Keep-alive ping failed: );
         }
     }
 
