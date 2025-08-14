@@ -1,4 +1,6 @@
 require('dotenv').config();
+// Load local environment file if it exists (for local development)
+require('dotenv').config({ path: '.env.local' });
 const { ServerApiVersion } = require('mongodb');
 
 const config = {

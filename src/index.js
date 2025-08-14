@@ -53,7 +53,7 @@ async function startZappo() {
     }
 
     // Start Express server
-    const PORT = process.env.PORT || 3000;
+    const PORT = process.env.PORT || process.env.LOCAL_PORT || 3001;
     app.listen(PORT, "0.0.0.0", () => {
       logger.info(`🌐 Express server running on port ${PORT}`);
       
