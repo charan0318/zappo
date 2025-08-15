@@ -17,10 +17,38 @@ const config = {
   
   // Database Configuration
   database: {
-    uri: process.env.MONGODB_URI_TESTNET,
-    mainnetUri: process.env.MONGODB_URI,
+    uri: process.env.MONGODB_URI || (() => { throw new Error('MONGODB_URI environment variable is required') })(),
+    testnetUri: process.env.MONGODB_URI_TESTNET || (() => { throw new Error('MONGODB_URI_TESTNET environment variable is required') })(),
     options: {
-      serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: false }
+      // Force proper Atlas SRV handling
+      tls: true,
+      tlsAllowInvalidCertificates: false,
+      
+      // SRV-specific options
+      srvMaxHosts: 0, // Use all available hosts
+      srvServiceName: 'mongodb',
+      
+      // Timeouts optimized for Atlas
+      serverSelectionTimeoutMS: 15000,
+      connectTimeoutMS: 15000,
+      socketTimeoutMS: 0,
+      heartbeatFrequencyMS: 10000,
+      
+      // Connection pool
+      maxPoolSize: 10,
+      minPoolSize: 1,
+      maxIdleTimeMS: 30000,
+      
+      // Retry configuration
+      retryWrites: true,
+      retryReads: true,
+      
+      // Atlas API versioning
+      serverApi: { 
+        version: ServerApiVersion.v1, 
+        strict: false, 
+        deprecationErrors: false 
+      }
     }
   },
   
@@ -41,7 +69,7 @@ const config = {
   
   // Testnet URLs
   testnet: {
-    faucetUrl: 'https://core.app/tools/testnet-faucet',
+    faucetUrl: process.env.FAUCET_URL || 'https://core.app/tools/testnet-faucet',
     explorerUrl: 'https://testnet.snowtrace.io'
   },
   
@@ -102,5 +130,11 @@ if (missingVars.length > 0) {
   console.warn('⚠️  Missing required environment variables:', missingVars);
   console.warn('Please check your .env file');
 }
+
+// URL Constants - public URLs that can be hardcoded
+config.urls = {
+  faucet: 'https://faucet.avax.network/',
+  explorer: 'https://testnet.snowtrace.io',
+};
 
 module.exports = config;

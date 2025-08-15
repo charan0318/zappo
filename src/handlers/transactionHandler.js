@@ -5,6 +5,7 @@ const { users, transactions } = require('../services/database');
 const { logger, logUserAction, logTransaction } = require('../utils/logger');
 const errorHandler = require('../utils/errorHandler');
 const errorRecovery = require('../utils/errorRecovery');
+const config = require('../config');
 
 class TransactionHandler {
   constructor() {
@@ -44,7 +45,7 @@ ${balanceValue.toFixed(6)} AVAX (Testnet)
 📍 *Testnet Wallet:* \`${result.wallet.address}\`
 
 💡 *Note:* This is testnet AVAX - not real money
-🔗 *Get more:* [Free Faucet](https://faucet.avax.network/)`);
+🔗 *Get more:* [Free Faucet](${config.urls.faucet})`);
       
     } catch (error) {
       const errorInfo = errorHandler.handleError(error, { 
@@ -167,7 +168,7 @@ ${balanceValue.toFixed(6)} AVAX (Testnet)
         const currentBalance = parseFloat(wallet.balance);
         
         if (sendAmount > currentBalance) {
-          throw new Error(`Insufficient testnet balance. You have ${currentBalance.toFixed(6)} AVAX (testnet) and tried to send ${sendAmount} AVAX. Get more from the faucet: https://faucet.avax.network/`);
+          throw new Error(`Insufficient testnet balance. You have ${currentBalance.toFixed(6)} AVAX (testnet) and tried to send ${sendAmount} AVAX. Get more from the faucet: ${config.urls.faucet}`);
         }
         
         // Estimate gas for both direct sends and claim links
@@ -275,8 +276,11 @@ Confirm? React with 👍 (yes) or 👎 (cancel)`;
           return { type: 'claim_link', result: txResult };
         } else {
           // Direct transaction to registered user
+          // Get the wallet provider for signing
+          const walletProvider = await walletHandler.getWalletProvider(phone);
+          
           txResult = await nebulaService.sendTransaction(
-            wallet.address,
+            walletProvider,
             data.to,
             data.amount
           );

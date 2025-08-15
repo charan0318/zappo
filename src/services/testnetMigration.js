@@ -13,12 +13,12 @@ class TestnetMigrationService {
       const { MongoClient } = require('mongodb');
       
       // Connect to mainnet database
-      this.mainnetClient = new MongoClient(config.database.mainnetUri, config.database.options);
+      this.mainnetClient = new MongoClient(config.database.uri, config.database.options);
       await this.mainnetClient.connect();
       this.mainnetDb = this.mainnetClient.db();
       
       // Connect to testnet database (current connection)
-      this.testnetClient = new MongoClient(config.database.uri, config.database.options);
+      this.testnetClient = new MongoClient(config.database.testnetUri, config.database.options);
       await this.testnetClient.connect();
       this.testnetDb = this.testnetClient.db();
       
