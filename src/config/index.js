@@ -17,8 +17,8 @@ const config = {
   
   // Database Configuration
   database: {
-    uri: process.env.MONGODB_URI_TESTNET || 'mongodb+srv://chve0402:v3IV3lOi1cGX1dzO@cluster0.jtsit5r.mongodb.net/zappo_testnet?retryWrites=true&w=majority&appName=Cluster0',
-    mainnetUri: process.env.MONGODB_URI || 'mongodb+srv://chve0402:v3IV3lOi1cGX1dzO@cluster0.jtsit5r.mongodb.net/test?retryWrites=true&w=majority&appName=Cluster0', // Use test as mainnet DB since that's where real data is
+    uri: process.env.MONGODB_URI_TESTNET,
+    mainnetUri: process.env.MONGODB_URI,
     options: {
       serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: false }
     }
@@ -37,6 +37,12 @@ const config = {
     clientSecret: process.env.THIRDWEB_CLIENT_SECRET,
     chainId: 43113, // AVAX Fuji Testnet
     rpcUrl: 'https://api.avax-test.network/ext/bc/C/rpc'
+  },
+  
+  // Testnet URLs
+  testnet: {
+    faucetUrl: 'https://core.app/tools/testnet-faucet',
+    explorerUrl: 'https://testnet.snowtrace.io'
   },
   
   // Nebula Chat (Step 1)
