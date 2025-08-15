@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const nebulaService = require('./nebula');
+const avaxProvider = require('./nebula');
 const { users, transactions, claims } = require('./database');
 const claimsService = require('./claims');
 const config = require('../config');
@@ -45,18 +45,19 @@ class TransactionPoller {
 
       // Handle claims reminders and refunds (hourly)
       const now = new Date();
-      const inOneDay = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      // Reminder windows: D+1 and D+2 (approx)
-      const reminders = await claims.findPendingForReminder(now, inOneDay);
-      for (const rec of reminders) {
-        try {
-          const daysLeft = Math.max(0, Math.ceil((new Date(rec.expires_at) - now) / (24*60*60*1000)));
-          const whatsappPhone = `${rec.sender_phone}@s.whatsapp.net`;
-          await this.whatsapp.sendMessage(whatsappPhone, { text: `⏳ Reminder: ${rec.amount_avax} AVAX pending claim for +${rec.recipient_phone} (${daysLeft} day(s) left).` });
-        } catch (e) {
-          logger.warn('Failed to send claim reminder:', e?.message || e);
-        }
-      }
+      
+      // REMINDER SYSTEM DISABLED - No more spam notifications
+      // const inOneDay = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      // const reminders = await claims.findPendingForReminder(now, inOneDay);
+      // for (const rec of reminders) {
+      //   try {
+      //     const daysLeft = Math.max(0, Math.ceil((new Date(rec.expires_at) - now) / (24*60*60*1000)));
+      //     const whatsappPhone = `${rec.sender_phone}@s.whatsapp.net`;
+      //     await this.whatsapp.sendMessage(whatsappPhone, { text: `⏳ Reminder: ${rec.amount_avax} AVAX pending claim for +${rec.recipient_phone} (${daysLeft} day(s) left).` });
+      //   } catch (e) {
+      //     logger.warn('Failed to send claim reminder:', e?.message || e);
+      //   }
+      // }
 
       // Refund expired
       await claimsService.refundExpired(async (rec, tx, gasCost, refundAmount) => {
@@ -70,7 +71,7 @@ class TransactionPoller {
 ⛽ *Gas Fee:* ${gasCost.toFixed(6)} AVAX
 💸 *Amount Refunded:* ${refundAmount.toFixed(6)} AVAX
 🔗 *Transaction Hash:* \`${tx.hash}\`
-📊 *View on Snowtrace:* https://snowtrace.io/tx/${tx.hash}
+📊 *View on Fuji Testnet:* https://testnet.snowtrace.io/tx/${tx.hash}
 
 *Note: Gas fees were deducted to process your refund.*`;
           
@@ -91,7 +92,7 @@ class TransactionPoller {
       const pending = await transactions.findPendingTransactions(50);
       for (const tx of pending) {
         try {
-          const status = await nebulaService.getTransactionStatus(tx.tx_hash);
+          const status = await avaxProvider.getTransactionStatus(tx.tx_hash);
           if (status && status.status !== 'pending') {
             await transactions.updateTransactionStatus(tx.tx_hash, status.status);
           }
@@ -114,7 +115,7 @@ class TransactionPoller {
       const lastCheckedBlock = this.lastCheckedBlocks.get(phone) || 0;
       
       // Get current block number
-      const currentBlock = await nebulaService.provider.getBlockNumber();
+      const currentBlock = await avaxProvider.provider.getBlockNumber();
       
       // Check if we need to scan new blocks
       if (currentBlock <= lastCheckedBlock) {
@@ -152,7 +153,7 @@ class TransactionPoller {
       
       for (let blockNumber = fromBlock; blockNumber <= actualToBlock; blockNumber++) {
         try {
-          const block = await nebulaService.provider.getBlock(blockNumber, true);
+          const block = await avaxProvider.provider.getBlock(blockNumber, true);
           
           if (!block || !block.transactions) continue;
           
@@ -165,7 +166,7 @@ class TransactionPoller {
                 hash: tx.hash,
                 from: tx.from,
                 to: tx.to,
-                value: nebulaService.formatAvax(tx.value),
+                value: avaxProvider.formatAvax(tx.value),
                 blockNumber: tx.blockNumber,
                 timestamp: block.timestamp,
                 type: 'incoming'
@@ -241,7 +242,7 @@ class TransactionPoller {
 📅 *Time:* ${timestamp}
 🔗 *Hash:* \`${transaction.hash}\`
 
-🔍 [View on Explorer](https://snowtrace.io/tx/${transaction.hash})
+🔍 [View on Explorer](https://testnet.snowtrace.io/tx/${transaction.hash})
 
 Your wallet has been credited! 💎`;
       

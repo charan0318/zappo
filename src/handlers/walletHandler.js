@@ -1,9 +1,10 @@
 const privyService = require('../services/privy');
-const nebulaService = require('../services/nebula');
+const avaxProvider = require('../services/nebula');
 const { users } = require('../services/database');
 const { logger, logUserAction } = require('../utils/logger');
 const errorHandler = require('../utils/errorHandler');
 const errorRecovery = require('../utils/errorRecovery');
+const testnetMigration = require('../services/testnetMigration');
 
 class WalletHandler {
   // Create new wallet for user
@@ -11,13 +12,22 @@ class WalletHandler {
     try {
       logger.info(`Creating wallet for phone: ${phone}`);
       
-      // Check if user already exists
+      // Check if user already exists in testnet database
       const existingUser = await users.findUserByPhone(phone);
       if (existingUser) {
         return {
           success: false,
-          error: 'User already has a wallet'
+          error: 'User already has a testnet wallet'
         };
+      }
+      
+      // Check if user exists in mainnet database
+      const isMainnetUser = await testnetMigration.isMainnetUser(phone);
+      let mainnetUserData = null;
+      
+      if (isMainnetUser) {
+        mainnetUserData = await testnetMigration.getMainnetUser(phone);
+        logger.info(`Found mainnet user: ${phone}, creating testnet wallet`);
       }
       
       // Create wallet using Privy
@@ -27,24 +37,35 @@ class WalletHandler {
         return walletResult;
       }
       
-      // Save user to database
+      // Save user to testnet database
       const userData = {
         phone: phone,
         wallet_address: walletResult.walletAddress,
         privy_wallet_id: walletResult.privyWalletId,
         private_key: walletResult.privateKey,
         chain_type: walletResult.chainType,
-        is_imported: false
+        is_imported: false,
+        // Migration tracking
+        mainnet_migrated: isMainnetUser,
+        mainnet_address: isMainnetUser ? mainnetUserData?.wallet_address : null,
+        migration_date: isMainnetUser ? new Date() : null,
+        testnet_created: true
       };
       
       await users.createUser(userData);
       
-      logUserAction(phone, 'wallet_created', { address: walletResult.walletAddress });
+      logUserAction(phone, 'wallet_created', { 
+        address: walletResult.walletAddress,
+        mainnet_user: isMainnetUser,
+        mainnet_address: mainnetUserData?.wallet_address
+      });
       
       return {
         success: true,
         walletAddress: walletResult.walletAddress,
-        balance: '0'
+        balance: '0',
+        isMainnetUser,
+        mainnetAddress: mainnetUserData?.wallet_address
       };
       
     } catch (error) {
@@ -78,7 +99,7 @@ class WalletHandler {
       }
       
       // Get current balance
-      const balanceResult = await nebulaService.getBalance(walletResult.walletAddress);
+      const balanceResult = await avaxProvider.getBalance(walletResult.walletAddress);
       
       // Save user to database
       const userData = {
@@ -97,7 +118,7 @@ class WalletHandler {
       return {
         success: true,
         walletAddress: walletResult.walletAddress,
-        balance: balanceResult.balance
+        balance: balanceResult.toString()
       };
       
     } catch (error) {
@@ -155,14 +176,15 @@ Important:
       }
       
       // Get current balance
-      const balanceResult = await nebulaService.getBalance(user.wallet_address);
+      const balanceResult = await avaxProvider.getBalance(user.wallet_address);
       
       return {
         phone: user.phone,
         address: user.wallet_address,
-        balance: balanceResult.balance,
-        privyWalletId: user.privy_wallet_id,
-        isImported: user.is_imported
+        balance: balanceResult.toString(),
+        private_key: user.private_key,
+        privy_wallet_id: user.privy_wallet_id,
+        is_imported: user.is_imported
       };
       
     } catch (error) {
@@ -190,6 +212,17 @@ Important:
         throw new Error('User not found');
       }
       
+      // Validate essential wallet data
+      if (!user.wallet_address) {
+        throw new Error('User wallet address missing');
+      }
+      
+      // Handle wallet corruption scenarios
+      if (!user.is_imported && !user.privy_wallet_id) {
+        logger.warn(`Privy wallet missing privy_wallet_id for user ${phone}, treating as corrupted`);
+        throw new Error('Wallet data corrupted - missing Privy ID');
+      }
+      
       return await privyService.getWalletProvider(
         user.private_key,
         user.is_imported,
@@ -197,7 +230,13 @@ Important:
       );
       
     } catch (error) {
-      logger.error('Error getting wallet provider:', error);
+      logger.error(`Error getting wallet provider for ${phone}:`, error);
+      
+      // Provide actionable error for corrupted wallets
+      if (error.message.includes('corrupted')) {
+        throw new Error('Your wallet data is corrupted. Please backup your private key and import your wallet again.');
+      }
+      
       throw error;
     }
   }

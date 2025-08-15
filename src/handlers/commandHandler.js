@@ -3,11 +3,13 @@ const walletHandler = require('./walletHandler');
 const transactionHandler = require('./transactionHandler');
 const contactHandler = require('./contactHandler');
 const claimsService = require('../services/claims');
+const nebulaService = require('../services/nebula');
 const { logger, logUserAction } = require('../utils/logger');
 const { users } = require('../services/database');
 const config = require('../config');
 const nebulaChat = require('../services/nebulaChat');
 const whatsappService = require('../services/whatsapp');
+const testnetMigration = require('../services/testnetMigration');
 const errorHandler = require('../utils/errorHandler');
 const errorRecovery = require('../utils/errorRecovery');
 
@@ -135,18 +137,22 @@ class CommandHandler {
         const normalized = p.replace(/^\+/, '');
         const contactUser = await users.findUserByPhone(normalized);
         if (contactUser) {
-          await this.sendMessage(from, `✅ Contact is registered on ZAPPO.\n\n🏦 Address: \`${contactUser.wallet_address}\`\n\nHow much AVAX do you want to send?`);
+          // Get display name - use phone number if no other info available
+          const displayName = normalized; // Could be enhanced to get actual name from contacts
+          
+          await this.sendMessage(from, `✅ Contact is registered on ZAPPO testnet.\n\n🏦 *Testnet Address:* \`${contactUser.wallet_address}\`\n\n🧪 How much testnet AVAX do you want to send?`);
           // Prime a state to expect amount then confirmation
           this.userStates.set(senderPhone, {
             state: 'AWAITING_AMOUNT_FOR_CONTACT',
             targetAddress: contactUser.wallet_address,
             contactPhone: normalized,
+            contactName: displayName,
             timestamp: Date.now()
           });
           return;
         } else {
           // Not registered → offer claim-link escrow flow
-          await this.sendMessage(from, `👤 This contact isn't registered on ZAPPO yet.\n\nThey'll have up to 3 days to claim a transfer you initiate; if they don't, it's automatically refunded to you.\n\n💡 *Note:* Gas fees for processing the claim will be deducted from the amount you send.\n\nHow much AVAX would you like to send?`);
+          await this.sendMessage(from, `👤 This contact isn't registered on ZAPPO testnet yet.\n\nThey'll have up to 3 days to claim a testnet transfer you initiate; if they don't, it's automatically refunded to you.\n\n🧪 *Note:* This uses testnet AVAX - no real money involved!\n\nHow much testnet AVAX would you like to send?`);
           this.userStates.set(senderPhone, {
             state: 'AWAITING_AMOUNT_FOR_UNREGISTERED',
             recipientPhone: normalized,
@@ -170,6 +176,10 @@ class CommandHandler {
       switch (intent) {
         case 'HELP':
           await this.sendMessage(from, commandParser.getHelpText());
+          break;
+          
+        case 'GREETING':
+          await this.handleGreeting(from, phone);
           break;
           
         case 'CREATE_WALLET':
@@ -212,6 +222,10 @@ class CommandHandler {
 
         case 'CLAIM':
           await this.handleClaimFlow(from, phone, parameters.token);
+          break;
+
+        case 'MAINNET_STATUS':
+          await this.handleMainnetStatus(from, phone);
           break;
           
         default:
@@ -256,7 +270,7 @@ class CommandHandler {
 💰 *Amount Received:* ${result.transferAmount.toFixed(6)} AVAX
 ⛽ *Gas Fee:* ${result.gasCost.toFixed(6)} AVAX
 🔗 *Transaction Hash:* \`${result.tx.hash}\`
-📊 *View on Snowtrace:* https://snowtrace.io/tx/${result.tx.hash}
+📊 *View on Fuji Testnet:* https://testnet.snowtrace.io/tx/${result.tx.hash}
 
 *Note: Gas fees were deducted from the held amount to complete your claim.*`);
       
@@ -296,29 +310,80 @@ ${error.message}
   // Handle wallet creation flow
   async handleCreateWallet(from, phone) {
     try {
-      // Check if user already has a wallet
+      // Check if user already has a testnet wallet
       const existingUser = await users.findUserByPhone(phone);
       if (existingUser) {
-        await this.sendMessage(from, '❌ You already have a wallet! Use `/backup` to export your private key.');
+        const message = existingUser.mainnet_migrated 
+          ? '✅ You already have a testnet wallet! Your mainnet wallet is safely preserved.\n\nUse `/balance` to check your testnet balance or `/backup` to export your testnet private key.'
+          : '❌ You already have a wallet! Use `/backup` to export your private key.';
+        await this.sendMessage(from, message);
         return;
       }
       
-      await this.sendMessage(from, '🔄 Creating your wallet... This may take a moment.');
+      // Check if user is a mainnet user
+      const isMainnetUser = await testnetMigration.isMainnetUser(phone);
+      
+      if (isMainnetUser) {
+        // Show special welcome message for mainnet users
+        const mainnetUserData = await testnetMigration.getMainnetUser(phone);
+        const welcomeMessage = `🏦 *Welcome back to ZAPPO!*
+
+🔄 *Testnet Mode Active*
+
+Your mainnet wallet is safe and will be restored when we return to mainnet. For now, let's explore ZAPPO on testnet!
+
+📊 *Your Mainnet Wallet:*
+• Address: \`${mainnetUserData?.wallet_address || 'Unknown'}\`
+• This wallet is preserved and secure
+
+🧪 *Creating your testnet wallet now...*`;
+
+        await this.sendMessage(from, welcomeMessage);
+      } else {
+        await this.sendMessage(from, '🔄 Creating your wallet... This may take a moment.');
+      }
       
       const result = await walletHandler.createWallet(phone);
       
       if (result.success) {
-        await this.sendMessage(from, `✅ *Wallet Created Successfully!*
+        if (result.isMainnetUser) {
+          // Special success message for migrated users
+          await this.sendMessage(from, `✅ *Testnet Wallet Created!*
+
+🧪 *Your Testnet Wallet:*
+• Address: \`${result.walletAddress}\`
+• Ready for testnet transactions
+
+💧 *Get Free Testnet AVAX:*
+🔗 [Avalanche Faucet](https://faucet.avax.network/)
+• Visit the faucet to get free testnet AVAX
+• Use your new testnet address above
+
+🏦 *Your Mainnet Wallet:*
+• Address: \`${result.mainnetAddress}\`
+• Safe and will be restored later
+
+Try these testnet commands:
+• \`/balance\` - Check testnet balance
+• \`/backup\` - Export testnet private key
+• \`/help\` - See all commands`);
+        } else {
+          // Regular success message for new users
+          await this.sendMessage(from, `✅ *Wallet Created Successfully!*
 
 🏦 Your wallet is now ready to use! Try:
 • \`/balance\` - Check your balance
 • \`/backup\` - Export your private key
 • \`/help\` - See all commands
 
-💡 *To start sending AVAX, deposit some AVAX to your wallet first!*`);
+� *Get Free Testnet AVAX:*
+🔗 [Avalanche Faucet](https://faucet.avax.network/)
+
+💡 *This is testnet mode - perfect for  testing!*`);
+        }
         
         // Send wallet address as separate message for easy copying
-        await this.sendMessage(from, `📋 *Your Wallet Address:*\n\`${result.walletAddress}\`\n\n*Tap to copy this address for deposits!*`);
+        await this.sendMessage(from, `📋 *Your Testnet Wallet Address:*\n\`${result.walletAddress}\`\n\n*Tap to copy this address for the faucet!*`);
       } else {
         await this.sendMessage(from, `❌ Failed to create wallet: ${result.error}`);
       }
@@ -326,6 +391,51 @@ ${error.message}
     } catch (error) {
       logger.error('Error creating wallet:', error);
       await this.sendMessage(from, `❌ Error creating wallet: ${error.message}`);
+    }
+  }
+  
+  // Handle greeting messages
+  async handleGreeting(from, phone) {
+    try {
+      // Check if user has a wallet
+      const existingUser = await users.findUserByPhone(phone);
+      
+      if (!existingUser) {
+        // New user - send welcome message
+        await this.sendMessage(from, this.getWelcomeMessage());
+        return;
+      }
+      
+      // Existing user - show personalized greeting with balance
+      const wallet = await walletHandler.getUserWallet(phone);
+      if (wallet) {
+        // Get fresh balance from blockchain
+        const freshBalance = await nebulaService.getBalance(wallet.address);
+        const balanceValue = parseFloat(freshBalance.balance) || 0;
+        
+        await this.sendMessage(from, `👋 *Hello! Welcome back to ZAPPO* 🧪
+
+💰 *Your Testnet Balance:* ${balanceValue.toFixed(6)} AVAX
+
+📍 *Wallet:* \`${wallet.address}\`
+
+🧪 *Testnet Mode* - Safe to experiment!
+
+*What would you like to do?*
+• Type "balance" to refresh your balance
+• Type "send avax" to send testnet AVAX
+• Type "history" to see recent transactions
+• Type "help" for all commands
+
+💡 *Get more testnet AVAX:* [Free Faucet](https://faucet.avax.network/)`);
+      } else {
+        // User exists but no wallet - shouldn't happen, but handle gracefully
+        await this.sendMessage(from, `👋 Hello! It seems there was an issue with your wallet. Please type "create wallet" to set up a new one.`);
+      }
+      
+    } catch (error) {
+      logger.error('Error handling greeting:', error);
+      await this.sendMessage(from, `👋 Hello! Welcome to ZAPPO. Type "help" to see what I can do!`);
     }
   }
   
@@ -374,11 +484,13 @@ You can type cancel to stop anytime.`);
       
       let sendParams;
       
-      if (parameters.amount && parameters.recipient) {
-        // Direct parameters from regex match
+      if (parameters.amount && (parameters.recipient || parameters.recipientPhone)) {
+        // Direct parameters from regex match or phone-based flows
         sendParams = {
           amount: parameters.amount,
           recipient: parameters.recipient,
+          recipientPhone: parameters.recipientPhone,
+          name: parameters.name, // Preserve the name parameter
           valid: true
         };
       } else if (parameters.args) {
@@ -390,7 +502,7 @@ You can type cancel to stop anytime.`);
           state: 'AWAITING_CONTACT_FOR_SEND',
           timestamp: Date.now()
         });
-        await this.sendMessage(from, `📱 *Send AVAX - Step 1: Contact*\n\nPlease share the contact you want to send AVAX to.\n\nYou can:\n• Share a contact from your phone\n• Or type the phone number (e.g., 919489042245)\n\nType "cancel" to stop.`);
+        await this.sendMessage(from, `📱 *Send Testnet AVAX - Step 1: Contact* 🧪\n\nPlease share the contact you want to send testnet AVAX to.\n\nYou can:\n• Share a contact from your phone\n• Or type the phone number (e.g., 919489042245)\n\n🧪 *Note:* This uses testnet AVAX - no real money!\n\nType "cancel" to stop.`);
         return;
       } else {
         await this.sendMessage(from, '❌ Invalid send format. Try: "send 1 AVAX to 0x..." or just type "send avax" for step-by-step.');
@@ -481,8 +593,15 @@ You can type cancel to stop anytime.`);
           const amount = parseFloat(msg);
           if (!isNaN(amount) && amount > 0) {
             const target = userState.targetAddress;
+            const contactName = userState.contactName;
+            const contactPhone = userState.contactPhone;
             this.userStates.delete(phone);
-            await this.handleSendTransaction(from, phone, { amount, recipient: target });
+            await this.handleSendTransaction(from, phone, { 
+              amount, 
+              recipient: target, 
+              name: contactName,
+              recipientPhone: contactPhone 
+            });
           } else {
             await this.sendMessage(from, '❌ Please enter a valid AVAX amount (e.g., 0.1).');
           }
@@ -494,7 +613,11 @@ You can type cancel to stop anytime.`);
             const recipientPhone = userState.recipientPhone;
             this.userStates.delete(phone);
             // Route through send flow; it will detect phone-like recipient and use claim-link escrow
-            await this.handleSendTransaction(from, phone, { amount, recipient: recipientPhone });
+            await this.handleSendTransaction(from, phone, { 
+              amount, 
+              recipientPhone: recipientPhone, // Use recipientPhone for unregistered users
+              name: recipientPhone 
+            });
           } else {
             await this.sendMessage(from, '❌ Please enter a valid AVAX amount (e.g., 0.1).');
           }
@@ -507,7 +630,7 @@ You can type cancel to stop anytime.`);
             recipientPhone: msg,
             timestamp: Date.now()
           });
-          await this.sendMessage(from, `📱 *Send AVAX - Step 2: Amount*\n\nHow much AVAX would you like to send to ${msg}?\n\nPlease enter the amount (e.g., 0.1, 1.5, 10)\n\nType "cancel" to stop.`);
+          await this.sendMessage(from, `📱 *Send Testnet AVAX - Step 2: Amount* 🧪\n\nHow much testnet AVAX would you like to send to ${msg}?\n\nPlease enter the amount (e.g., 0.1, 1.5, 10)\n\n🧪 *Note:* This is testnet AVAX - safe to test!\n\nType "cancel" to stop.`);
           break;
         }
         case 'AWAITING_AMOUNT_FOR_SEND': {
@@ -516,7 +639,11 @@ You can type cancel to stop anytime.`);
             const recipientPhone = userState.recipientPhone;
             this.userStates.delete(phone);
             // Route through send flow; it will detect phone-like recipient and use claim-link escrow
-            await this.handleSendTransaction(from, phone, { amount, recipient: recipientPhone });
+            await this.handleSendTransaction(from, phone, { 
+              amount, 
+              recipientPhone: recipientPhone, // Use recipientPhone for manual phone entry
+              name: recipientPhone 
+            });
           } else {
             await this.sendMessage(from, '❌ Please enter a valid AVAX amount (e.g., 0.1).');
           }
@@ -748,6 +875,54 @@ Need help? Type \`/help\` for a full list of commands!`;
     } catch (error) {
       logger.error('Error in reset command:', error);
       await this.sendMessage(from, `❌ Error executing reset: ${error.message}`);
+    }
+  }
+
+  // Handle mainnet status check for existing users
+  async handleMainnetStatus(from, phone) {
+    try {
+      const currentUser = await users.findUserByPhone(phone);
+      const isMainnetUser = await testnetMigration.isMainnetUser(phone);
+      
+      if (!isMainnetUser) {
+        await this.sendMessage(from, `ℹ️ *Testnet User*
+
+You don't have a mainnet wallet with ZAPPO. This testnet wallet is your primary wallet.
+
+🧪 *Current Status:* Testnet Only - Test without real money!
+
+🔗 [Get Free Testnet AVAX](https://faucet.avax.network/)`);
+        return;
+      }
+
+      const mainnetUserData = await testnetMigration.getMainnetUser(phone);
+      
+      const statusMessage = `🏦 *Mainnet Wallet Status*
+
+✅ *Your mainnet wallet is safe and preserved*
+
+📊 *Mainnet Wallet Details:*
+• Address: \`${mainnetUserData?.wallet_address || 'Unknown'}\`
+• Status: Preserved & Secure
+• Network: Avalanche C-Chain (Mainnet)
+
+🧪 *Current Testnet Wallet:*
+• Address: \`${currentUser?.wallet_address || 'Not created'}\`
+• Network: Avalanche Fuji (Testnet)
+• Status: ${currentUser ? 'Active' : 'Not created'}
+
+🔄 *Migration Info:*
+• Migrated: ${currentUser?.migration_date ? new Date(currentUser.migration_date).toLocaleDateString() : 'N/A'}
+• Your mainnet funds will be restored when ZAPPO returns to mainnet
+
+💡 *For now, enjoy testing on Fuji testnet!*
+🔗 [Get Free Testnet AVAX](https://faucet.avax.network/)`;
+
+      await this.sendMessage(from, statusMessage);
+      
+    } catch (error) {
+      logger.error('Error checking mainnet status:', error);
+      await this.sendMessage(from, `❌ Error checking mainnet status: ${error.message}`);
     }
   }
 }

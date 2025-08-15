@@ -3,7 +3,7 @@ const { claims } = require('./database');
 const { logger } = require('../utils/logger');
 const config = require('../config');
 const privyService = require('./privy');
-const nebulaService = require('./nebula');
+const avaxProvider = require('./nebula');
 
 function generateToken() {
   return crypto.randomBytes(16).toString('hex');
@@ -46,6 +46,7 @@ class ClaimsService {
         sender_wallet_address: senderAddress,
         recipient_phone: recipientPhone,
         token_hash: tokenHash,
+        token_plain: token, // Temporarily store the plain token for debugging
         ephemeral_wallet_id: ephemeralWalletId,
         ephemeral_wallet_address: ephemeralWalletAddress,
         amount_avax: amountAvax,
@@ -58,6 +59,8 @@ class ClaimsService {
       logger.info(`Escrow hold created: token=${token.substring(0, 8)}..., expires=${expiresAt}`);
       
       const link = buildClaimLink(token);
+      logger.info(`📋 CLAIM LINK: ${link}`); // Log the full claim link for debugging
+      
       return { link, token };
       
     } catch (error) {
@@ -110,7 +113,7 @@ class ClaimsService {
         throw new Error('Unable to access the escrow wallet. Please try again later or contact support.');
       }
       
-      const gasEstimate = await nebulaService.estimateGas(record.ephemeral_wallet_address, recipientWalletAddress, record.amount_avax);
+      const gasEstimate = await avaxProvider.estimateGas(record.ephemeral_wallet_address, recipientWalletAddress, record.amount_avax);
       if (!gasEstimate || !gasEstimate.estimatedCost) {
         logger.error(`Gas estimation failed for claim: ${record._id}`);
         throw new Error('Unable to estimate transaction fees. Please try again later.');
@@ -142,7 +145,7 @@ class ClaimsService {
       logger.info(`Proceeding with claim: transfer=${transferAmount}, gas=${gasCost}, buffer=${gasBuffer}`);
       
       // Sweep funds from ephemeral to recipient (amount minus gas)
-      const tx = await nebulaService.sendTransaction(privyWallet, recipientWalletAddress, transferAmount);
+      const tx = await avaxProvider.sendTransaction(privyWallet, recipientWalletAddress, transferAmount);
       
       if (!tx || !tx.hash) {
         logger.error(`Transaction failed for claim: ${record._id}`);
@@ -180,7 +183,7 @@ class ClaimsService {
         const privyWallet = await privyService.getWalletProvider(null, false, rec.ephemeral_wallet_id);
         
         // Estimate gas for refund
-        const gasEstimate = await nebulaService.estimateGas(rec.ephemeral_wallet_address, rec.sender_wallet_address, rec.amount_avax);
+        const gasEstimate = await avaxProvider.estimateGas(rec.ephemeral_wallet_address, rec.sender_wallet_address, rec.amount_avax);
         const gasCost = parseFloat(gasEstimate.estimatedCost);
         const safetyBuffer = config.escrow.claimMinGasBuffer || 0.002;
         const totalRequired = gasCost + safetyBuffer;
@@ -197,7 +200,7 @@ class ClaimsService {
         // Calculate refund amount after deducting gas
         const refundAmount = rec.amount_avax - gasCost;
         
-        const tx = await nebulaService.sendTransaction(privyWallet, rec.sender_wallet_address, refundAmount);
+        const tx = await avaxProvider.sendTransaction(privyWallet, rec.sender_wallet_address, refundAmount);
         await claims.updateClaimById(rec._id, { 
           status: 'refunded', 
           refund_tx_hash: tx.hash,
@@ -219,6 +222,76 @@ class ClaimsService {
   // Find claims expiring within window for reminders
   async findPendingForReminderRange(start, end) {
     return await claims.findPendingForReminder(start, end);
+  }
+
+  // Simple wrapper function for transaction handler
+  async createClaimLink(senderPhone, recipientPhone, amountAvax, recipientName = 'Unknown') {
+    try {
+      logger.info(`Creating claim link: ${senderPhone} -> ${recipientPhone}, amount: ${amountAvax} AVAX`);
+
+      // Get sender wallet details
+      const { users } = require('./database');
+      const senderUser = await users.findUserByPhone(senderPhone);
+      if (!senderUser) {
+        throw new Error('Sender wallet not found');
+      }
+
+      // Create ephemeral wallet for holding the funds
+      const ephemeralWallet = await privyService.createWallet(`escrow_${recipientPhone}_${Date.now()}`);
+      if (!ephemeralWallet.success) {
+        throw new Error('Failed to create ephemeral wallet for escrow');
+      }
+
+      // Transfer funds to ephemeral wallet
+      let holdTxHash;
+      try {
+        // Get wallet provider for the sender
+        const walletProvider = await privyService.getWalletProvider(
+          senderUser.private_key,
+          senderUser.is_imported,
+          senderUser.privy_wallet_id
+        );
+
+        // Use AVAX provider to send transaction
+        const transferResult = await avaxProvider.sendTransaction(
+          walletProvider,
+          ephemeralWallet.walletAddress,
+          amountAvax
+        );
+        
+        holdTxHash = transferResult.hash;
+      } catch (error) {
+        logger.error('Failed to transfer to ephemeral wallet:', error);
+        throw new Error('Failed to create escrow transaction');
+      }
+
+      // Create the hold record
+      const holdResult = await this.createHold({
+        senderPhone,
+        senderAddress: senderUser.wallet_address,
+        recipientPhone,
+        amountAvax,
+        ephemeralWalletId: ephemeralWallet.privyWalletId,
+        ephemeralWalletAddress: ephemeralWallet.walletAddress,
+        holdTxHash
+      });
+
+      return {
+        success: true,
+        claimLink: holdResult.link,
+        token: holdResult.token,
+        escrowAddress: ephemeralWallet.walletAddress,
+        txHash: holdTxHash,
+        message: `✅ Escrow created! Send this to ${recipientName} (${recipientPhone}):\n\n🔗 Claim your ${amountAvax} AVAX: ${holdResult.link}\n\n⏰ Valid for 3 days. If not claimed, funds will be refunded automatically.`
+      };
+
+    } catch (error) {
+      logger.error('Error creating claim link:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 }
 

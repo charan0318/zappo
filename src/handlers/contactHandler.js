@@ -1,6 +1,6 @@
 const { contacts } = require('../services/database');
 const { logger, logUserAction } = require('../utils/logger');
-const nebulaService = require('../services/nebula');
+const avaxProvider = require('../services/nebula');
 
 class ContactHandler {
   // Handle add contact request
@@ -9,7 +9,7 @@ class ContactHandler {
       const { name, address } = parameters;
       
       // Validate address format
-      if (!nebulaService.validateAddress(address)) {
+      if (!avaxProvider.validateAddress(address)) {
         await this.sendMessage(from, 'That address doesn’t look right. Please provide a valid 0x… address.');
         return;
       }

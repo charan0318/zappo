@@ -193,12 +193,17 @@ const transactionOperations = {
     );
   },
   
-  async getRecentTransactions(limit = 10) {
+  async getRecentTransactions(phone, limit = 10) {
     const collection = getCollection('transactions');
     return await collection
-      .find({})
+      .find({ 
+        $or: [
+          { from_phone: phone },
+          { to_phone: phone }
+        ]
+      })
       .sort({ timestamp: -1 })
-      .limit(limit)
+      .limit(parseInt(limit))
       .toArray();
   }
 };

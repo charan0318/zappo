@@ -26,7 +26,7 @@ class TransactionHandler {
         const currentBalance = await nebulaService.getBalance(wallet.address);
         
         // Update wallet balance in database
-        await users.updateUserWallet(phone, { balance: currentBalance.toString() });
+        await users.updateUser(phone, { balance: currentBalance.toString() });
         
         return { wallet, currentBalance };
       }, 3, 1000);
@@ -34,7 +34,17 @@ class TransactionHandler {
       // Log the balance check
       logUserAction(phone, 'balance_check', { balance: result.currentBalance });
       
-      await this.sendMessage(from, `💰 *Current Balance*\n\n${result.currentBalance.toFixed(6)} AVAX\n\n📍 Wallet: \`${result.wallet.address}\``);
+      // Extract the balance value from the AVAX provider response
+      const balanceValue = parseFloat(result.currentBalance.balance);
+      
+      await this.sendMessage(from, `💰 *Testnet Balance* 🧪
+
+${balanceValue.toFixed(6)} AVAX (Testnet)
+
+📍 *Testnet Wallet:* \`${result.wallet.address}\`
+
+💡 *Note:* This is testnet AVAX - not real money
+🔗 *Get more:* [Free Faucet](https://faucet.avax.network/)`);
       
     } catch (error) {
       const errorInfo = errorHandler.handleError(error, { 
@@ -51,6 +61,9 @@ class TransactionHandler {
   // Handle transaction history request
   async handleGetTransactions(from, phone, limit = 10) {
     try {
+      // Ensure limit is an integer
+      const txLimit = parseInt(limit) || 10;
+      
       const result = await errorHandler.withRetry(async () => {
         // Get user wallet
         const wallet = await walletHandler.getUserWallet(phone);
@@ -59,7 +72,7 @@ class TransactionHandler {
         }
 
         // Get recent transactions
-        const recentTxs = await transactions.getRecentTransactions(phone, limit);
+        const recentTxs = await transactions.getRecentTransactions(phone, txLimit);
         return { wallet, recentTxs };
       }, 2, 500);
       
@@ -78,7 +91,7 @@ class TransactionHandler {
         historyMessage += `${type}: ${amount} AVAX\n`;
         historyMessage += `📅 ${date}\n`;
         if (tx.tx_hash) {
-          historyMessage += `🔗 [View](https://snowtrace.io/tx/${tx.tx_hash})\n`;
+          historyMessage += `🔗 [View](https://testnet.snowtrace.io/tx/${tx.tx_hash})\n`;
         }
         historyMessage += `\n`;
       }
@@ -99,6 +112,11 @@ class TransactionHandler {
       const userMessage = errorRecovery.createEnhancedErrorMessage(errorInfo);
       await this.sendMessage(from, userMessage);
     }
+  }
+
+  // Alias for handleGetTransactions - for backward compatibility
+  async handleGetHistory(from, phone, limit = 10) {
+    return await this.handleGetTransactions(from, phone, limit);
   }
 
   // Handle send transaction request
@@ -126,30 +144,51 @@ class TransactionHandler {
         // Parse recipient details
         const { recipientAddress, recipientPhone, name } = sendParams;
         
+        // If recipient is a phone number, check if they have a wallet
+        let finalRecipientAddress = recipientAddress;
+        let shouldCreateClaimLink = false;
+        
+        if (recipientPhone && !recipientAddress) {
+          // Check if this phone number has a wallet
+          const recipientWallet = await walletHandler.getUserWallet(recipientPhone);
+          if (recipientWallet) {
+            // They have a wallet - do direct send
+            finalRecipientAddress = recipientWallet.address;
+            shouldCreateClaimLink = false;
+            logger.info(`Recipient ${recipientPhone} has wallet, using direct send to ${recipientWallet.address}`);
+          } else {
+            // They don't have a wallet - create claim link
+            shouldCreateClaimLink = true;
+            logger.info(`Recipient ${recipientPhone} has no wallet, will create claim link`);
+          }
+        }
+        
         // Get fresh balance
         const currentBalance = parseFloat(wallet.balance);
         
         if (sendAmount > currentBalance) {
-          throw new Error(`Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`);
+          throw new Error(`Insufficient testnet balance. You have ${currentBalance.toFixed(6)} AVAX (testnet) and tried to send ${sendAmount} AVAX. Get more from the faucet: https://faucet.avax.network/`);
         }
         
-        // Estimate gas (for direct send). For claim-link we'll send to ephemeral wallet later
-        const gasEstimate = recipientPhone
-          ? { gasLimit: '21000', gasPrice: '0', estimatedCost: '0.0003' }
-          : await nebulaService.estimateGas(wallet.address, recipientAddress, sendAmount);
+        // Estimate gas for both direct sends and claim links
+        const gasEstimate = await nebulaService.estimateGas(
+          wallet.address, 
+          shouldCreateClaimLink ? '0x0000000000000000000000000000000000000001' : finalRecipientAddress, 
+          sendAmount
+        );
         
         // For direct sends, user needs to cover amount + gas
-        // For claim-links, user only needs to cover the send amount (gas is paid during claim)
-        const totalCost = recipientPhone ? sendAmount : sendAmount + parseFloat(gasEstimate.estimatedCost);
+        // For claim-links, user ALSO needs to cover amount + gas (to send to ephemeral wallet)
+        const totalCost = sendAmount + parseFloat(gasEstimate.estimatedCost);
         
         if (totalCost > currentBalance) {
-          const message = recipientPhone 
-            ? `Insufficient balance. You have ${currentBalance.toFixed(6)} AVAX and tried to send ${sendAmount} AVAX.`
-            : `You don't have enough to cover amount + gas. Estimated total: ${totalCost.toFixed(6)} AVAX.`;
+          const message = shouldCreateClaimLink 
+            ? `Insufficient testnet balance. You need ${totalCost.toFixed(6)} AVAX (${sendAmount} + ${parseFloat(gasEstimate.estimatedCost).toFixed(6)} gas) but have ${currentBalance.toFixed(6)} AVAX. Get more: https://faucet.avax.network/`
+            : `Insufficient testnet balance for amount + gas. Need: ${totalCost.toFixed(6)} AVAX, Have: ${currentBalance.toFixed(6)} AVAX. Get more: https://faucet.avax.network/`;
           throw new Error(message);
         }
         
-        return { wallet, recipientAddress, recipientPhone, name, currentBalance, gasEstimate, totalCost };
+        return { wallet, recipientAddress: finalRecipientAddress, recipientPhone: shouldCreateClaimLink ? recipientPhone : null, name, currentBalance, gasEstimate, totalCost, shouldCreateClaimLink };
       }, 2, 1000);
 
       // Create transaction summary
@@ -160,21 +199,23 @@ class TransactionHandler {
         gasEstimate: result.gasEstimate,
         totalCost: result.totalCost,
         phone: phone,
-        recipientPhone: result.recipientPhone
+        recipientPhone: result.recipientPhone,
+        shouldCreateClaimLink: result.shouldCreateClaimLink
       };
 
       // Show confirmation
       const recipientDisplay = result.name || result.recipientAddress || result.recipientPhone;
-      const feeDisplay = result.recipientPhone ? 'Free (claim-link)' : `${parseFloat(result.gasEstimate.estimatedCost).toFixed(6)} AVAX`;
+      const feeDisplay = `${parseFloat(result.gasEstimate.estimatedCost).toFixed(6)} AVAX`;
       
-      const confirmMessage = `🔄 *Transaction Confirmation*
+      const confirmMessage = `🔄 *Testnet Transaction Confirmation* 🧪
 
-💸 *Sending:* ${sendAmount} AVAX
+💸 *Sending:* ${sendAmount} AVAX (Testnet)
 👤 *To:* ${recipientDisplay}
 ⛽ *Gas Fee:* ${feeDisplay}
 💰 *Total Cost:* ${result.totalCost.toFixed(6)} AVAX
 
-${result.recipientPhone ? '📱 *Note:* Recipient will receive a claim link' : ''}
+${result.recipientPhone ? '📱 *Note:* Recipient will receive a claim link and pay gas when claiming' : ''}
+🧪 *Testnet:* No real money involved
 
 Confirm? React with 👍 (yes) or 👎 (cancel)`;
 
@@ -218,7 +259,7 @@ Confirm? React with 👍 (yes) or 👎 (cancel)`;
 
         let txResult;
         
-        if (data.recipientPhone) {
+        if (data.shouldCreateClaimLink) {
           // Create claim link for unregistered user
           txResult = await claimsService.createClaimLink(
             phone,
@@ -250,12 +291,14 @@ Confirm? React with 👍 (yes) or 👎 (cancel)`;
 
       // Send success message based on transaction type
       if (result.type === 'direct') {
-        await this.sendMessage(from, `✅ *Transaction Successful*
+        await this.sendMessage(from, `✅ *Testnet Transaction Successful* 🧪
 
-💸 *Sent:* ${data.amount} AVAX
+💸 *Sent:* ${data.amount} AVAX (Testnet)
 👤 *To:* ${data.to}
 ⛽ *Gas:* ${parseFloat(data.gasEstimate.estimatedCost).toFixed(6)} AVAX
-🔗 *Transaction:* [View on Snowtrace](https://snowtrace.io/tx/${result.result.hash})`);
+🔗 *Transaction:* [View on Fuji Testnet](https://testnet.snowtrace.io/tx/${result.result.hash})
+
+💡 *Note:* This was testnet AVAX - no real money`);
 
         // Log successful transaction
         logTransaction(phone, data.to, data.amount, 'sent', result.result.hash);
@@ -264,13 +307,14 @@ Confirm? React with 👍 (yes) or 👎 (cancel)`;
         await this.updateUserBalance(phone);
         
       } else {
-        await this.sendMessage(from, `✅ *Claim Link Created*
+        await this.sendMessage(from, `✅ *Testnet Claim Link Created* 🧪
 
-💸 *Amount:* ${data.amount} AVAX
+💸 *Amount:* ${data.amount} AVAX (Testnet)
 📱 *Recipient:* ${data.recipientPhone}
-🔗 *Claim Link:* ${result.result.claimUrl}
+🔗 *Claim Link:* ${result.result.claimLink}
 
-The recipient will be notified and can claim their AVAX!`);
+🧪 *Note:* This is testnet AVAX - safe to test!
+The recipient will be notified and can claim their testnet AVAX!`);
 
         // Log successful claim link creation
         logTransaction(phone, data.recipientPhone, data.amount, 'claim_link_created', result.result.ephemeralAddress);
@@ -308,7 +352,7 @@ The recipient will be notified and can claim their AVAX!`);
         }
 
         const currentBalance = await nebulaService.getBalance(wallet.address);
-        await users.updateUserWallet(phone, { balance: currentBalance.toString() });
+        await users.updateUser(phone, { balance: currentBalance.toString() });
         
         return currentBalance;
       }, 3, 1000);

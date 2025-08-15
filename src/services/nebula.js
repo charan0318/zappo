@@ -106,7 +106,7 @@ class NebulaService {
       
       if (wallet.isPrivyWallet) {
         // For Privy-managed wallets, use Privy's sendTransaction method
-        tx.chainId = 43114; // Avalanche C-Chain
+        tx.chainId = 43113; // Avalanche Fuji Testnet
         transaction = await wallet.sendTransaction(tx);
         
         logger.info(`Privy transaction sent: ${transaction.hash}`);

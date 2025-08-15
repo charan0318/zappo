@@ -24,6 +24,12 @@ class CommandParser {
       // Help
       HELP: /^(help|commands|what\s+can\s+you\s+do)/i,
       
+      // Greetings
+      GREETING: /^(hi|hello|hey|good\s+morning|good\s+afternoon|good\s+evening|hola|namaste)/i,
+      
+      // Mainnet status
+      MAINNET_STATUS: /^(mainnet|mainnet\s+status|check\s+mainnet|my\s+mainnet)/i,
+      
       // Session management
       // Remove STATUS from user commands - admin only
       // STATUS: /^(status|connection|connected|whatsapp\s+status)/i,
@@ -204,14 +210,17 @@ class CommandParser {
   getHelpText() {
     return `🤖 *ZAPPO Commands*
 
+🧪 *TESTNET MODE ACTIVE* 🧪
+
 *Wallet Management:*
 • \`/help\` - Show this help message
 • Create wallet - "create wallet" or "new wallet"
 • Import wallet - "import wallet" with private key
 • \`/backup\` - Export your private key
+• "mainnet" - Check your mainnet wallet status
 
 *Balance & History:*
-• \`/balance\` - Check AVAX balance
+• \`/balance\` - Check testnet AVAX balance
 • \`/history\` - View recent transactions
 
 *Send AVAX:*
@@ -223,15 +232,22 @@ class CommandParser {
 • \`/addcontact name 0xaddress\` - Save contact
 • "contacts" - List saved contacts
 
+*Get Testnet AVAX:*
+🔗 [Free Faucet](https://faucet.avax.network/)
+
 *Examples:*
 • "send 1 AVAX to 0x1234..."
 • "what's my balance?"
 • "show transaction history"
 • "transfer 0.5 to John"
+• "mainnet" - Check mainnet wallet
 
 *Transaction Confirmation:*
 • React with 👍 to confirm transactions
-• React with 👎 to cancel transactions`;
+• React with 👎 to cancel transactions
+
+💡 *This is testnet - perfect for testing!*
+`;
   }
   
   // Check if input is a confirmation

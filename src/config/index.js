@@ -17,7 +17,8 @@ const config = {
   
   // Database Configuration
   database: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/zappo',
+    uri: process.env.MONGODB_URI_TESTNET || 'mongodb+srv://chve0402:v3IV3lOi1cGX1dzO@cluster0.jtsit5r.mongodb.net/zappo_testnet?retryWrites=true&w=majority&appName=Cluster0',
+    mainnetUri: process.env.MONGODB_URI || 'mongodb+srv://chve0402:v3IV3lOi1cGX1dzO@cluster0.jtsit5r.mongodb.net/test?retryWrites=true&w=majority&appName=Cluster0', // Use test as mainnet DB since that's where real data is
     options: {
       serverApi: { version: ServerApiVersion.v1, strict: false, deprecationErrors: false }
     }
@@ -34,8 +35,8 @@ const config = {
   thirdweb: {
     clientId: process.env.THIRDWEB_CLIENT_ID,
     clientSecret: process.env.THIRDWEB_CLIENT_SECRET,
-    chainId: 43114, // AVAX C-Chain Mainnet
-    rpcUrl: 'https://api.avax.network/ext/bc/C/rpc'
+    chainId: 43113, // AVAX Fuji Testnet
+    rpcUrl: 'https://api.avax-test.network/ext/bc/C/rpc'
   },
   
   // Nebula Chat (Step 1)
@@ -73,7 +74,7 @@ const config = {
   
   // Feature Flags
   features: {
-    enableNotifications: true,
+    enableNotifications: false, // Disabled to stop spam
     enableContactSupport: true,
     enableNLP: false, // Start with regex-based parsing
     nebulaChatOnly: false // Enable full wallet features; no longer chat-only
